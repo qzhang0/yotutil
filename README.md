@@ -3,6 +3,7 @@
 Download YouTube Music videos as MP3 files — a thin, opinionated wrapper around [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
 ## Why not just use yt-dlp directly?
 
@@ -119,4 +120,4 @@ uv run yotutil --help    # smoke test CLI
 
 ## License
 
-MIT
+[MIT](LICENSE)

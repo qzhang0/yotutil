@@ -3,6 +3,7 @@ name = "yotutil"
 version = "0.1.0"
 description = "YouTube Music to MP3 downloader"
 readme = "README.md"
+license = { text = "MIT" }
 authors = [
     { name = "Qi Zhang", email = "QiZhang864@Gmail.com" }
 ]
