@@ -1,0 +1,25 @@
+[project]
+name = "yotutil"
+version = "0.1.0"
+description = "YouTube Music to MP3 downloader"
+readme = "README.md"
+authors = [
+    { name = "Qi Zhang", email = "QiZhang864@Gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "yt-dlp>=2024.0.0",
+    "typer>=0.15.0",
+]
+
+[project.scripts]
+yotutil = "yotutil.cli:app"
+
+[build-system]
+requires = ["uv_build>=0.10.3,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0.0",
+]

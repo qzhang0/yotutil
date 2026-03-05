@@ -1,0 +1,39 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+
+# Audio artifacts
+*.mp3
+*.webm
+*.m4a
+*.opus
+*.flac
+
+# Common output directory
+downloads/
+
+# Environment / secrets
+.env
+.env.*
+
+# Logs
+*.log
+
+# macOS
+.DS_Store
+
+# Test / lint caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+*.coverage
+
+# Project scratch space
+.scratch/
+
+# Lock file (tool, not library — don't commit)
+uv.lock
