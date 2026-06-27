@@ -1,7 +1,17 @@
 """Tests for downloader module."""
 
+from unittest.mock import patch
+
+import pytest
+import yt_dlp
+
 from yotutil.config import Config
-from yotutil.downloader import build_yt_dlp_opts
+from yotutil.downloader import (
+    DownloadError,
+    _looks_like_stale_extractor,
+    build_yt_dlp_opts,
+    download,
+)
 
 
 def test_build_opts_default():
@@ -36,3 +46,60 @@ def test_build_opts_quality():
 
     audio_pp = next(pp for pp in opts["postprocessors"] if pp["key"] == "FFmpegExtractAudio")
     assert audio_pp["preferredquality"] == "5"
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ERROR: [youtube] abc: This video is not available",
+        "ERROR: Unable to extract player response",
+        "nsig extraction failed",
+    ],
+)
+def test_looks_like_stale_extractor_true(message):
+    assert _looks_like_stale_extractor(message) is True
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "ERROR: ffmpeg not found",
+        "HTTP Error 403: Forbidden",
+        "Postprocessing: error converting to mp3",
+    ],
+)
+def test_looks_like_stale_extractor_false(message):
+    assert _looks_like_stale_extractor(message) is False
+
+
+def _patch_download_raising(message):
+    """Make yt_dlp.YoutubeDL(...).download(...) raise DownloadError(message)."""
+    mock_ydl = patch("yotutil.downloader.yt_dlp.YoutubeDL").start()
+    instance = mock_ydl.return_value.__enter__.return_value
+    instance.download.side_effect = yt_dlp.utils.DownloadError(message)
+    return mock_ydl
+
+
+@patch("yotutil.downloader.check_ffmpeg")
+def test_download_appends_hint_on_stale_extractor(_mock_ffmpeg):
+    _patch_download_raising("ERROR: [youtube] abc: This video is not available")
+    try:
+        with pytest.raises(DownloadError) as exc:
+            download("https://youtu.be/abc", Config(), output_dir="/tmp/out")
+    finally:
+        patch.stopall()
+
+    assert "out of date" in str(exc.value)
+    assert "uv sync --upgrade-package yt-dlp" in str(exc.value)
+
+
+@patch("yotutil.downloader.check_ffmpeg")
+def test_download_no_hint_on_unrelated_failure(_mock_ffmpeg):
+    _patch_download_raising("ERROR: Postprocessing: error converting to mp3")
+    try:
+        with pytest.raises(DownloadError) as exc:
+            download("https://youtu.be/abc", Config(), output_dir="/tmp/out")
+    finally:
+        patch.stopall()
+
+    assert "out of date" not in str(exc.value)
