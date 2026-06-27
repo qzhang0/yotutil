@@ -36,6 +36,24 @@ def _detect_js_runtimes() -> dict:
     return runtimes
 
 
+# Extraction failures that usually mean yt-dlp itself is out of date rather than
+# the video being genuinely gone (YouTube changes break old extractors).
+_STALE_EXTRACTOR_SIGNS = (
+    "video is not available",
+    "video unavailable",
+    "failed to extract",
+    "unable to extract",
+    "nsig extraction failed",
+    "sign in to confirm",
+)
+
+
+def _looks_like_stale_extractor(message: str) -> bool:
+    """Heuristic: does this error look like an outdated-yt-dlp extraction failure?"""
+    msg = message.lower()
+    return any(sign in msg for sign in _STALE_EXTRACTOR_SIGNS)
+
+
 def _progress_hook(d: dict) -> None:
     """Display download progress."""
     if d["status"] == "downloading":
@@ -90,4 +108,10 @@ def download(url: str, config: Config, output_dir: str | None = None) -> None:
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
     except yt_dlp.utils.DownloadError as e:
-        raise DownloadError(f"Download failed: {e}") from e
+        msg = f"Download failed: {e}"
+        if _looks_like_stale_extractor(str(e)):
+            msg += (
+                " — if the video plays in a browser, your yt-dlp may be out of "
+                "date; update with: uv sync --upgrade-package yt-dlp"
+            )
+        raise DownloadError(msg) from e
