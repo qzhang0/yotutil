@@ -203,8 +203,8 @@ Two more things to know:
 
 - `--max-height` and `--compatible` both shape the video, so they only work
   together with `--video`. If you forget it, yotutil says so rather than quietly
-  handing you an MP3. The `--quality` option is the reverse: it sets MP3 quality,
-  so it does nothing when you use `--video`.
+  handing you an MP3. `--quality` is the reverse — it sets MP3 quality — so
+  yotutil also tells you if you pass it alongside `--video`.
 - Downloading a large video to a network drive or NAS can stall during the final merge step. Download to a local folder first, then copy the finished file across.
 
 ---
@@ -279,7 +279,7 @@ Download one video or playlist as MP3.
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--output-dir` | `-o` | current folder (or settings file) | Where to save the MP3s |
-| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst (MP3 only; ignored with `--video`) |
+| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst (MP3 only; not valid with `--video`) |
 | `--verbose` | `-v` | off | Print detailed technical output |
 | `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
 | `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
@@ -292,7 +292,7 @@ Download every address listed in a text file.
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--output-dir` | `-o` | current folder (or settings file) | Where to save the MP3s |
-| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst (MP3 only; ignored with `--video`) |
+| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst (MP3 only; not valid with `--video`) |
 | `--verbose` | `-v` | off | Print detailed technical output |
 | `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
 | `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
