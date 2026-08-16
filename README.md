@@ -200,7 +200,10 @@ which is free and plays essentially anything.
 
 Two more things to know:
 
-- The `--quality` option does nothing with `--video`. It sets MP3 quality, and no MP3 is being made.
+- `--max-height` and `--compatible` both shape the video, so they only work
+  together with `--video`. If you forget it, yotutil says so rather than quietly
+  handing you an MP3. The `--quality` option is the reverse: it sets MP3 quality,
+  so it does nothing when you use `--video`.
 - Downloading a large video to a network drive or NAS can stall during the final merge step. Download to a local folder first, then copy the finished file across.
 
 ---

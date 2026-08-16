@@ -61,6 +61,32 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
+def _validate_video_options(
+    video: bool, max_height: int | None, compatible: bool
+) -> None:
+    """Reject video-only flags passed without --video.
+
+    Both shape the video stream, so without --video they would do nothing at
+    all. Saying so beats handing back an MP3 as though the flag had applied.
+    """
+    if video:
+        return
+
+    unused = [
+        name
+        for name, given in (
+            ("--max-height", max_height is not None),
+            ("--compatible", compatible),
+        )
+        if given
+    ]
+    if unused:
+        raise typer.BadParameter(
+            f"{' and '.join(unused)} only applies when downloading video. "
+            "Add --video to keep the video, or drop the option to get an MP3."
+        )
+
+
 def _prepare(
     output_dir: str | None, quality: str, verbose: bool
 ) -> tuple[Config, str]:
@@ -85,6 +111,7 @@ def dl(
     compatible: CompatibleOption = False,
 ) -> None:
     """Download a YouTube video or playlist as MP3, or as video with --video."""
+    _validate_video_options(video, max_height, compatible)
     config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading: {url}")
@@ -116,6 +143,8 @@ def batch(
     compatible: CompatibleOption = False,
 ) -> None:
     """Download multiple URLs from a text file as MP3s, or as videos with --video."""
+    _validate_video_options(video, max_height, compatible)
+
     if not file.exists():
         typer.echo(f"Error: File not found: {file}", err=True)
         raise typer.Exit(code=1)
