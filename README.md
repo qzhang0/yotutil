@@ -309,7 +309,7 @@ Download every address listed in a text file.
 | `ffmpeg is required but not found` | FFmpeg didn't install. Rerun step 1b for your system. |
 | `A JavaScript runtime (deno, node, or bun) is required` | Node didn't install. macOS: `brew install node`. Linux: rerun step 1a. |
 | `This video is not available` — but it plays fine in your browser | YouTube changed something and your copy of yotutil is out of date. Run `uv tool upgrade yotutil`. |
-| `HTTP Error 403: Forbidden` | Usually also fixed by `uv tool upgrade yotutil`. YouTube periodically blocks the method used to fetch audio, and updates restore it. |
+| `HTTP Error 403: Forbidden` | Try `uv tool upgrade yotutil` first. If that doesn't help, see [When downloads suddenly stop working](#when-downloads-suddenly-stop-working) — YouTube periodically blocks the method used to fetch audio. |
 | Downloads are very slow | Normal — YouTube limits download speed. A typical song still takes only a few seconds. |
 
 To update yotutil at any time:
