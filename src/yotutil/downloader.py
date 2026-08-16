@@ -5,6 +5,7 @@ import shutil
 from functools import lru_cache
 
 import yt_dlp
+from yt_dlp.utils import remove_terminal_sequences
 
 from yotutil.config import Config
 
@@ -52,6 +53,10 @@ _STALE_EXTRACTOR_SIGNS = (
     "unable to extract",
     "nsig extraction failed",
     "sign in to confirm",
+    # A 403 on the media URL means the player client we picked fell out of
+    # favour with YouTube. It looks like a permissions error but the remedy is
+    # the same as a stale extractor: update, or switch player_clients.
+    "403: forbidden",
 )
 
 
@@ -71,32 +76,105 @@ def _looks_like_stale_extractor(message: str) -> bool:
     return any(sign in msg for sign in _STALE_EXTRACTOR_SIGNS)
 
 
+# Pad every line to a fixed width so a short line fully erases a longer one.
+_PROGRESS_WIDTH = 60
+
+
+def _plain(value: str) -> str:
+    """Strip yt-dlp's terminal colour codes and surrounding whitespace.
+
+    yt-dlp colours its progress strings when stdout is a terminal. The escapes
+    inflate len() without taking up screen width, so a bare \\r overwrite would
+    leave coloured fragments of the previous line behind. Use yt-dlp's own
+    stripper so this tracks whatever escapes it decides to emit.
+    """
+    return remove_terminal_sequences(value).strip()
+
+
 def _progress_hook(d: dict) -> None:
-    """Display download progress."""
+    """Display download progress on a single, self-erasing line."""
     if d["status"] == "downloading":
-        pct = d.get("_percent_str", "?%").strip()
-        speed = d.get("_speed_str", "?").strip()
-        eta = d.get("_eta_str", "?").strip()
-        print(f"\r  {pct} at {speed} ETA {eta}", end="", flush=True)
+        pct = _plain(d.get("_percent_str", "?%"))
+        speed = _plain(d.get("_speed_str", "?"))
+        eta = _plain(d.get("_eta_str", "?"))
+        line = f"  {pct} at {speed} ETA {eta}"
+        print("\r" + line.ljust(_PROGRESS_WIDTH), end="", flush=True)
     elif d["status"] == "finished":
-        print("\r  Download complete, converting...", flush=True)
+        # "processing", not "converting" — with --video nothing is transcoded.
+        print("\r" + "  Download complete, processing...".ljust(_PROGRESS_WIDTH))
 
 
-def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
-    """Build yt-dlp options dict from config."""
+class _PostprocessorReporter:
+    """Announce post-download stages, which otherwise run in total silence.
+
+    Merging a large video takes minutes with no output at all, which is
+    indistinguishable from a hang. yt-dlp also fires several stages twice, so
+    repeats are suppressed.
+    """
+
+    LABELS = {
+        "Merger": "Merging video and audio",
+        "ExtractAudio": "Converting to MP3",
+        "EmbedThumbnail": "Embedding cover art",
+        "Metadata": "Writing metadata",
+    }
+
+    def __init__(self) -> None:
+        self._last: str | None = None
+
+    def __call__(self, d: dict) -> None:
+        if d.get("status") != "started":
+            return
+        label = self.LABELS.get(d.get("postprocessor", ""))
+        if label is None or label == self._last:
+            return
+        self._last = label
+        print("\r" + f"  {label}...".ljust(_PROGRESS_WIDTH))
+
+
+def _video_format(max_height: int | None, compatible: bool = False) -> str:
+    """Format selector for video mode, optionally capped and/or codec-limited."""
+    height = f"[height<={max_height}]" if max_height is not None else ""
+    if compatible:
+        # H.264 video + AAC audio is the combination essentially every player
+        # opens, including QuickTime. Fall back to anything if YouTube doesn't
+        # offer it for this video.
+        return (
+            f"bestvideo[vcodec^=avc1]{height}+bestaudio[acodec^=mp4a]/"
+            f"bestvideo{height}+bestaudio/best"
+        )
+    if max_height is None:
+        return "bestvideo*+bestaudio/best"
+    # Caps size only — YouTube often serves AV1 at every height, so this does
+    # not by itself guarantee a more widely-playable codec.
+    return f"bestvideo{height}+bestaudio/best{height}"
+
+
+def build_yt_dlp_opts(
+    config: Config,
+    output_dir: str | None = None,
+    video: bool = False,
+    max_height: int | None = None,
+    compatible: bool = False,
+) -> dict:
+    """Build yt-dlp options dict from config.
+
+    With `video`, keep the original video instead of extracting audio: pull the
+    best video+audio streams and mux them, skipping the MP3 transcode entirely.
+    `config.audio_quality` is an MP3 setting and has no effect in this mode.
+    `max_height` and `compatible` only apply there too — audio streams have
+    neither a frame height nor a video codec.
+    """
     out = output_dir or config.output_dir
 
     opts: dict = {
-        "format": "bestaudio/best",
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": config.audio_quality,
-            },
-        ],
+        "format": (
+            _video_format(max_height, compatible) if video else "bestaudio/best"
+        ),
+        "postprocessors": [],
         "outtmpl": f"{out}/%(title)s.%(ext)s",
         "progress_hooks": [_progress_hook],
+        "postprocessor_hooks": [_PostprocessorReporter()],
         "quiet": not logger.isEnabledFor(logging.DEBUG),
         "no_warnings": not logger.isEnabledFor(logging.DEBUG),
         # We render our own progress via _progress_hook; without this yt-dlp
@@ -110,6 +188,18 @@ def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
         },
     }
 
+    if video:
+        # Picture and sound arrive as separate streams; mux them into one file.
+        opts["merge_output_format"] = "mp4"
+    else:
+        opts["postprocessors"].append(
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": config.audio_quality,
+            }
+        )
+
     if config.embed_metadata:
         opts["postprocessors"].append({"key": "FFmpegMetadata"})
 
@@ -120,11 +210,24 @@ def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
     return opts
 
 
-def download(url: str, config: Config, output_dir: str | None = None) -> None:
-    """Download a single URL (video or playlist) and convert to MP3."""
+def download(
+    url: str,
+    config: Config,
+    output_dir: str | None = None,
+    video: bool = False,
+    max_height: int | None = None,
+    compatible: bool = False,
+) -> None:
+    """Download a single URL (video or playlist), as MP3 unless `video` is set."""
     check_ffmpeg()
 
-    opts = build_yt_dlp_opts(config, output_dir)
+    opts = build_yt_dlp_opts(
+        config,
+        output_dir,
+        video=video,
+        max_height=max_height,
+        compatible=compatible,
+    )
     logger.debug("yt-dlp options: %s", opts)
 
     try:
