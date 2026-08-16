@@ -20,9 +20,17 @@ OutputDirOption = Annotated[
     str | None,
     typer.Option("--output-dir", "-o", help="Output directory for MP3 files"),
 ]
+# Defaults to None, not "0", so an explicit -q is distinguishable from an
+# absent one. Without that, the CLI default silently overwrote audio_quality
+# from config.toml on every run.
 QualityOption = Annotated[
-    str,
-    typer.Option("--quality", "-q", help="Audio quality (0=best, 9=worst)"),
+    str | None,
+    typer.Option(
+        "--quality",
+        "-q",
+        help="Audio quality (0=best, 9=worst)",
+        show_default="0",
+    ),
 ]
 VerboseOption = Annotated[
     bool,
@@ -61,15 +69,21 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-def _validate_video_options(
-    video: bool, max_height: int | None, compatible: bool
+def _validate_output_options(
+    video: bool, max_height: int | None, compatible: bool, quality: str | None
 ) -> None:
-    """Reject video-only flags passed without --video.
+    """Reject flags that do nothing for the chosen output format.
 
-    Both shape the video stream, so without --video they would do nothing at
-    all. Saying so beats handing back an MP3 as though the flag had applied.
+    --max-height and --compatible shape the video stream, so they are inert
+    without --video; --quality sets MP3 quality, so it is inert with it. Saying
+    so beats silently producing a file the flag never influenced.
     """
     if video:
+        if quality is not None:
+            raise typer.BadParameter(
+                "--quality sets MP3 quality and does nothing with --video. "
+                "Drop it, or use --max-height to control the video size."
+            )
         return
 
     unused = [
@@ -88,12 +102,14 @@ def _validate_video_options(
 
 
 def _prepare(
-    output_dir: str | None, quality: str, verbose: bool
+    output_dir: str | None, quality: str | None, verbose: bool
 ) -> tuple[Config, str]:
     """Apply CLI overrides to the loaded config and ensure the output dir exists."""
     _setup_logging(verbose)
     config = load_config()
-    config.audio_quality = quality
+    # Only override when the flag was actually given, so config.toml survives.
+    if quality is not None:
+        config.audio_quality = quality
 
     out = output_dir or config.output_dir
     Path(out).mkdir(parents=True, exist_ok=True)
@@ -104,14 +120,14 @@ def _prepare(
 def dl(
     url: Annotated[str, typer.Argument(help="YouTube video or playlist URL")],
     output_dir: OutputDirOption = None,
-    quality: QualityOption = "0",
+    quality: QualityOption = None,
     verbose: VerboseOption = False,
     video: VideoOption = False,
     max_height: MaxHeightOption = None,
     compatible: CompatibleOption = False,
 ) -> None:
     """Download a YouTube video or playlist as MP3, or as video with --video."""
-    _validate_video_options(video, max_height, compatible)
+    _validate_output_options(video, max_height, compatible, quality)
     config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading: {url}")
@@ -136,14 +152,14 @@ def batch(
         Path, typer.Argument(help="Text file with one URL per line")
     ],
     output_dir: OutputDirOption = None,
-    quality: QualityOption = "0",
+    quality: QualityOption = None,
     verbose: VerboseOption = False,
     video: VideoOption = False,
     max_height: MaxHeightOption = None,
     compatible: CompatibleOption = False,
 ) -> None:
     """Download multiple URLs from a text file as MP3s, or as videos with --video."""
-    _validate_video_options(video, max_height, compatible)
+    _validate_output_options(video, max_height, compatible, quality)
 
     if not file.exists():
         typer.echo(f"Error: File not found: {file}", err=True)

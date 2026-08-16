@@ -5,7 +5,7 @@ import typer
 from typer.testing import CliRunner
 from yt_dlp.utils import remove_terminal_sequences
 
-from yotutil.cli import _validate_video_options, app
+from yotutil.cli import _prepare, _validate_output_options, app
 
 runner = CliRunner()
 
@@ -77,16 +77,68 @@ def test_batch_rejects_video_options_without_video(tmp_path):
 
 def test_video_options_accepted_with_video():
     """The combination that makes sense must not raise."""
-    _validate_video_options(video=True, max_height=720, compatible=True)
+    _validate_output_options(
+        video=True, max_height=720, compatible=True, quality=None
+    )
 
 
 def test_no_video_options_is_fine_without_video():
-    _validate_video_options(video=False, max_height=None, compatible=False)
+    _validate_output_options(
+        video=False, max_height=None, compatible=False, quality=None
+    )
 
 
 def test_validate_names_the_offending_option():
     with pytest.raises(typer.BadParameter, match="--max-height"):
-        _validate_video_options(video=False, max_height=720, compatible=False)
+        _validate_output_options(
+            video=False, max_height=720, compatible=False, quality=None
+        )
+
+
+def test_quality_accepted_for_audio():
+    _validate_output_options(
+        video=False, max_height=None, compatible=False, quality="5"
+    )
+
+
+def test_quality_rejected_with_video():
+    """--quality sets MP3 quality; no MP3 is produced in video mode."""
+    with pytest.raises(typer.BadParameter, match="--quality"):
+        _validate_output_options(
+            video=True, max_height=None, compatible=False, quality="5"
+        )
+
+
+def test_dl_rejects_quality_with_video():
+    result = runner.invoke(
+        app, ["dl", "https://example.com/x", "--video", "--quality", "5"]
+    )
+
+    assert result.exit_code != 0
+    assert "--quality" in _plain(result)
+
+
+def test_config_quality_survives_when_flag_absent(tmp_path, monkeypatch):
+    """Regression: the CLI default used to clobber config.toml unconditionally."""
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('audio_quality = "5"\n')
+    monkeypatch.setattr("yotutil.config.CONFIG_FILE", config_file)
+
+    config, _ = _prepare(
+        output_dir=str(tmp_path / "out"), quality=None, verbose=False
+    )
+
+    assert config.audio_quality == "5"
+
+
+def test_cli_quality_overrides_config(tmp_path, monkeypatch):
+    config_file = tmp_path / "config.toml"
+    config_file.write_text('audio_quality = "5"\n')
+    monkeypatch.setattr("yotutil.config.CONFIG_FILE", config_file)
+
+    config, _ = _prepare(output_dir=str(tmp_path / "out"), quality="9", verbose=False)
+
+    assert config.audio_quality == "9"
 
 
 def test_batch_file_not_found():
