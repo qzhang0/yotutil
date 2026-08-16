@@ -54,53 +54,61 @@ def test_build_opts_suppresses_yt_dlp_progress():
     assert opts["noprogress"] is True
 
 
-def test_build_opts_video_keeps_original_video():
-    """--video skips the MP3 transcode and merges picture + sound into one file."""
+@pytest.mark.parametrize(
+    "video, max_height, compatible, expected",
+    [
+        # Audio mode ignores both video-only knobs — streams have neither a
+        # frame height nor a video codec.
+        (False, None, False, "bestaudio/best"),
+        (False, 720, False, "bestaudio/best"),
+        (False, None, True, "bestaudio/best"),
+        (True, None, False, "bestvideo*+bestaudio/best"),
+        # Capping height avoids multi-GB 4K pulls for long videos.
+        (True, 720, False, "bestvideo[height<=720]+bestaudio/best[height<=720]"),
+        # QuickTime can't open AV1; prefer avc1/mp4a, but still fall back to
+        # anything playable when YouTube offers no H.264.
+        (
+            True,
+            None,
+            True,
+            "bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/bestvideo+bestaudio/best",
+        ),
+        (
+            True,
+            720,
+            True,
+            "bestvideo[vcodec^=avc1][height<=720]+bestaudio[acodec^=mp4a]/"
+            "bestvideo[height<=720]+bestaudio/best",
+        ),
+    ],
+    ids=[
+        "audio",
+        "audio-ignores-height",
+        "audio-ignores-compatible",
+        "video-best",
+        "video-capped",
+        "video-compatible",
+        "video-compatible-capped",
+    ],
+)
+def test_build_opts_format_selector(video, max_height, compatible, expected):
+    opts = build_yt_dlp_opts(
+        Config(),
+        output_dir="/tmp/out",
+        video=video,
+        max_height=max_height,
+        compatible=compatible,
+    )
+    assert opts["format"] == expected
+
+
+def test_build_opts_video_muxes_and_skips_transcode():
+    """--video merges picture + sound into one file with no MP3 conversion."""
     opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", video=True)
 
-    assert opts["format"] == "bestvideo*+bestaudio/best"
     assert opts["merge_output_format"] == "mp4"
-
     keys = [pp["key"] for pp in opts["postprocessors"]]
     assert "FFmpegExtractAudio" not in keys
-
-
-def test_build_opts_video_respects_max_height():
-    """Capping height avoids multi-GB 4K pulls for long videos."""
-    opts = build_yt_dlp_opts(
-        Config(), output_dir="/tmp/out", video=True, max_height=720
-    )
-    assert opts["format"] == "bestvideo[height<=720]+bestaudio/best[height<=720]"
-
-
-def test_build_opts_max_height_ignored_without_video():
-    """Height is meaningless when only audio is being fetched."""
-    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", max_height=720)
-    assert opts["format"] == "bestaudio/best"
-
-
-def test_build_opts_compatible_prefers_h264():
-    """QuickTime and older players can't open AV1; prefer avc1/mp4a when asked."""
-    opts = build_yt_dlp_opts(
-        Config(), output_dir="/tmp/out", video=True, compatible=True
-    )
-    assert opts["format"].startswith("bestvideo[vcodec^=avc1]")
-    assert "bestaudio[acodec^=mp4a]" in opts["format"]
-    # Must still fall back to anything playable if H.264 isn't offered.
-    assert opts["format"].endswith("/best")
-
-
-def test_build_opts_compatible_combines_with_max_height():
-    opts = build_yt_dlp_opts(
-        Config(), output_dir="/tmp/out", video=True, compatible=True, max_height=720
-    )
-    assert "vcodec^=avc1" in opts["format"]
-    assert "height<=720" in opts["format"]
-
-
-def test_build_opts_compatible_ignored_without_video():
-    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", compatible=True)
-    assert opts["format"] == "bestaudio/best"
 
 
 def test_build_opts_registers_postprocessor_hook():

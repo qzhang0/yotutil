@@ -1,11 +1,11 @@
 """yt-dlp wrapper for downloading and converting to MP3."""
 
 import logging
-import re
 import shutil
 from functools import lru_cache
 
 import yt_dlp
+from yt_dlp.utils import remove_terminal_sequences
 
 from yotutil.config import Config
 
@@ -76,18 +76,19 @@ def _looks_like_stale_extractor(message: str) -> bool:
     return any(sign in msg for sign in _STALE_EXTRACTOR_SIGNS)
 
 
-# yt-dlp colours its progress strings with ANSI escapes when stdout is a
-# terminal. The escapes inflate len() without taking up screen width, so a
-# bare \r overwrite leaves coloured fragments of the previous line behind.
-_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
-
 # Pad every line to a fixed width so a short line fully erases a longer one.
 _PROGRESS_WIDTH = 60
 
 
 def _plain(value: str) -> str:
-    """Strip ANSI colour codes and surrounding whitespace."""
-    return _ANSI_ESCAPE.sub("", value).strip()
+    """Strip yt-dlp's terminal colour codes and surrounding whitespace.
+
+    yt-dlp colours its progress strings when stdout is a terminal. The escapes
+    inflate len() without taking up screen width, so a bare \\r overwrite would
+    leave coloured fragments of the previous line behind. Use yt-dlp's own
+    stripper so this tracks whatever escapes it decides to emit.
+    """
+    return remove_terminal_sequences(value).strip()
 
 
 def _progress_hook(d: dict) -> None:
