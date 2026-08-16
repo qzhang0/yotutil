@@ -26,6 +26,8 @@ uv run yotutil --help    # CLI help
 - yt-dlp YouTube extraction requires `js_runtimes` and `remote_components` options — without these, downloads fail with "video not available"
 - yt-dlp's default player clients currently fail: `android_vr` 403s on media URLs, `tv` returns SABR-only formats, `web`/`ios`/`mweb` need a GVS PO token. We pin `player_client` to `web_embedded` first via `extractor_args` (`DEFAULT_PLAYER_CLIENTS`), overridable by `player_clients` in config.toml; revisit when YouTube changes
 - `noprogress` must stay on, or yt-dlp's progress bar interleaves with `_progress_hook`
+- yt-dlp colours progress strings with ANSI escapes only when stdout is a tty — strip them and pad lines, or `\r` leaves coloured fragments behind (not reproducible through a pipe)
+- Postprocessor hook names are `Merger`, `ExtractAudio`, `Metadata`, `EmbedThumbnail`, `MoveFiles`; several fire twice, so `_PostprocessorReporter` dedupes consecutive repeats
 - Audio quality uses yt-dlp scale: `0` = best, `9` = worst
 
 ## Notes

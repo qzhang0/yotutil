@@ -9,6 +9,7 @@ from yotutil.config import Config
 from yotutil.downloader import (
     DownloadError,
     _looks_like_stale_extractor,
+    _PostprocessorReporter,
     _progress_hook,
     build_yt_dlp_opts,
     download,
@@ -102,6 +103,32 @@ def test_build_opts_compatible_ignored_without_video():
     assert opts["format"] == "bestaudio/best"
 
 
+def test_build_opts_registers_postprocessor_hook():
+    """Post-download stages run silently otherwise, which reads as a hang."""
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out")
+    assert opts["postprocessor_hooks"]
+
+
+def test_postprocessor_reporter_announces_slow_stages(capsys):
+    reporter = _PostprocessorReporter()
+    reporter({"status": "started", "postprocessor": "Merger"})
+    assert "Merging" in capsys.readouterr().out
+
+
+def test_postprocessor_reporter_ignores_finished_events(capsys):
+    reporter = _PostprocessorReporter()
+    reporter({"status": "finished", "postprocessor": "Merger"})
+    assert capsys.readouterr().out == ""
+
+
+def test_postprocessor_reporter_deduplicates_repeats(capsys):
+    """yt-dlp fires several stages twice; announcing twice looks broken."""
+    reporter = _PostprocessorReporter()
+    reporter({"status": "started", "postprocessor": "Metadata"})
+    reporter({"status": "started", "postprocessor": "Metadata"})
+    assert capsys.readouterr().out.count("metadata") == 1
+
+
 def test_build_opts_video_still_embeds_metadata_and_thumbnail():
     opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", video=True)
 
@@ -112,9 +139,18 @@ def test_build_opts_video_still_embeds_metadata_and_thumbnail():
 
 def test_build_opts_audio_path_unchanged_by_video_flag():
     """Regression: the default MP3 path must be untouched by the new options."""
-    assert build_yt_dlp_opts(Config(), output_dir="/tmp/out") == build_yt_dlp_opts(
+    default = build_yt_dlp_opts(Config(), output_dir="/tmp/out")
+    explicit = build_yt_dlp_opts(
         Config(), output_dir="/tmp/out", video=False, max_height=None, compatible=False
     )
+
+    # Each call builds its own reporter (dedupe state must not leak between
+    # downloads), so those instances never compare equal. Check them by count
+    # and compare everything else.
+    for opts in (default, explicit):
+        assert len(opts.pop("postprocessor_hooks")) == 1
+
+    assert default == explicit
 
 
 def test_progress_hook_strips_ansi_colour_codes(capsys):
@@ -175,8 +211,8 @@ def test_build_opts_quality():
         "ERROR: [youtube] abc: This video is not available",
         "ERROR: Unable to extract player response",
         "nsig extraction failed",
-        # A 403 on the media URL is how player-client rot actually presents;
-        # this exact error is what broke every download before the client pin.
+        # A 403 on the media URL means the chosen player client fell out of
+        # favour — the remedy (update, or change player_clients) is the same.
         "ERROR: unable to download video data: HTTP Error 403: Forbidden",
     ],
 )

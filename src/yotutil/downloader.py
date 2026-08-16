@@ -54,7 +54,7 @@ _STALE_EXTRACTOR_SIGNS = (
     "nsig extraction failed",
     "sign in to confirm",
     # A 403 on the media URL means the player client we picked fell out of
-    # favour with YouTube. It reads like a permissions error, but the remedy is
+    # favour with YouTube. It looks like a permissions error but the remedy is
     # the same as a stale extractor: update, or switch player_clients.
     "403: forbidden",
 )
@@ -103,6 +103,34 @@ def _progress_hook(d: dict) -> None:
         print("\r" + "  Download complete, processing...".ljust(_PROGRESS_WIDTH))
 
 
+class _PostprocessorReporter:
+    """Announce post-download stages, which otherwise run in total silence.
+
+    Merging a large video takes minutes with no output at all, which is
+    indistinguishable from a hang. yt-dlp also fires several stages twice, so
+    repeats are suppressed.
+    """
+
+    LABELS = {
+        "Merger": "Merging video and audio",
+        "ExtractAudio": "Converting to MP3",
+        "EmbedThumbnail": "Embedding cover art",
+        "Metadata": "Writing metadata",
+    }
+
+    def __init__(self) -> None:
+        self._last: str | None = None
+
+    def __call__(self, d: dict) -> None:
+        if d.get("status") != "started":
+            return
+        label = self.LABELS.get(d.get("postprocessor", ""))
+        if label is None or label == self._last:
+            return
+        self._last = label
+        print("\r" + f"  {label}...".ljust(_PROGRESS_WIDTH))
+
+
 def _video_format(max_height: int | None, compatible: bool = False) -> str:
     """Format selector for video mode, optionally capped and/or codec-limited."""
     height = f"[height<={max_height}]" if max_height is not None else ""
@@ -145,6 +173,7 @@ def build_yt_dlp_opts(
         "postprocessors": [],
         "outtmpl": f"{out}/%(title)s.%(ext)s",
         "progress_hooks": [_progress_hook],
+        "postprocessor_hooks": [_PostprocessorReporter()],
         "quiet": not logger.isEnabledFor(logging.DEBUG),
         "no_warnings": not logger.isEnabledFor(logging.DEBUG),
         # We render our own progress via _progress_hook; without this yt-dlp
