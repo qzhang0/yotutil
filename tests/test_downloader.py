@@ -175,6 +175,9 @@ def test_build_opts_quality():
         "ERROR: [youtube] abc: This video is not available",
         "ERROR: Unable to extract player response",
         "nsig extraction failed",
+        # A 403 on the media URL is how player-client rot actually presents;
+        # this exact error is what broke every download before the client pin.
+        "ERROR: unable to download video data: HTTP Error 403: Forbidden",
     ],
 )
 def test_looks_like_stale_extractor_true(message):
@@ -185,7 +188,6 @@ def test_looks_like_stale_extractor_true(message):
     "message",
     [
         "ERROR: ffmpeg not found",
-        "HTTP Error 403: Forbidden",
         "Postprocessing: error converting to mp3",
     ],
 )

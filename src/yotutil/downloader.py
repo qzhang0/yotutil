@@ -53,6 +53,10 @@ _STALE_EXTRACTOR_SIGNS = (
     "unable to extract",
     "nsig extraction failed",
     "sign in to confirm",
+    # A 403 on the media URL means the player client we picked fell out of
+    # favour with YouTube. It reads like a permissions error, but the remedy is
+    # the same as a stale extractor: update, or switch player_clients.
+    "403: forbidden",
 )
 
 
