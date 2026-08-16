@@ -79,22 +79,38 @@ def _progress_hook(d: dict) -> None:
         eta = d.get("_eta_str", "?").strip()
         print(f"\r  {pct} at {speed} ETA {eta}", end="", flush=True)
     elif d["status"] == "finished":
-        print("\r  Download complete, converting...", flush=True)
+        # "processing", not "converting" — with --video nothing is transcoded.
+        print("\r  Download complete, processing...", flush=True)
 
 
-def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
-    """Build yt-dlp options dict from config."""
+def _video_format(max_height: int | None) -> str:
+    """Format selector for video mode, optionally capped by frame height."""
+    if max_height is None:
+        return "bestvideo*+bestaudio/best"
+    # Uncapped, a long 4K video can run to tens of GB. This caps size only —
+    # YouTube often serves AV1 at every height, so it does not guarantee a
+    # more widely-playable codec.
+    return f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]"
+
+
+def build_yt_dlp_opts(
+    config: Config,
+    output_dir: str | None = None,
+    video: bool = False,
+    max_height: int | None = None,
+) -> dict:
+    """Build yt-dlp options dict from config.
+
+    With `video`, keep the original video instead of extracting audio: pull the
+    best video+audio streams and mux them, skipping the MP3 transcode entirely.
+    `config.audio_quality` is an MP3 setting and has no effect in this mode, and
+    `max_height` only applies there — audio streams have no frame height.
+    """
     out = output_dir or config.output_dir
 
     opts: dict = {
-        "format": "bestaudio/best",
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "mp3",
-                "preferredquality": config.audio_quality,
-            },
-        ],
+        "format": _video_format(max_height) if video else "bestaudio/best",
+        "postprocessors": [],
         "outtmpl": f"{out}/%(title)s.%(ext)s",
         "progress_hooks": [_progress_hook],
         "quiet": not logger.isEnabledFor(logging.DEBUG),
@@ -110,6 +126,18 @@ def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
         },
     }
 
+    if video:
+        # Picture and sound arrive as separate streams; mux them into one file.
+        opts["merge_output_format"] = "mp4"
+    else:
+        opts["postprocessors"].append(
+            {
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": config.audio_quality,
+            }
+        )
+
     if config.embed_metadata:
         opts["postprocessors"].append({"key": "FFmpegMetadata"})
 
@@ -120,11 +148,17 @@ def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
     return opts
 
 
-def download(url: str, config: Config, output_dir: str | None = None) -> None:
-    """Download a single URL (video or playlist) and convert to MP3."""
+def download(
+    url: str,
+    config: Config,
+    output_dir: str | None = None,
+    video: bool = False,
+    max_height: int | None = None,
+) -> None:
+    """Download a single URL (video or playlist), as MP3 unless `video` is set."""
     check_ffmpeg()
 
-    opts = build_yt_dlp_opts(config, output_dir)
+    opts = build_yt_dlp_opts(config, output_dir, video=video, max_height=max_height)
     logger.debug("yt-dlp options: %s", opts)
 
     try:

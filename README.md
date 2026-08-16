@@ -144,6 +144,50 @@ Playlist addresses work too — yotutil downloads every track in the playlist.
 
 ---
 
+## Keeping the video instead of just the audio
+
+By default yotutil throws the picture away and keeps only the sound, as an MP3. Add `--video` to keep the whole thing as a video file (`.mp4`) instead:
+
+```bash
+yotutil dl "https://www.youtube.com/watch?v=..." --video -o ~/Movies
+```
+
+This works with `batch` too:
+
+```bash
+yotutil batch songs.txt --video -o ~/Movies
+```
+
+Nothing is re-encoded in this mode, so it's quicker and the quality is exactly what YouTube served. The title, creator, and cover image are still saved into the file.
+
+### Keeping the file size sane
+
+By default `--video` takes the highest quality YouTube offers, which for a long
+concert in 4K can mean **well over 10 GB**. Use `--max-height` to cap it:
+
+```bash
+yotutil dl "https://www.youtube.com/watch?v=..." --video --max-height 1080
+```
+
+Measured on one 83-minute 4K concert video:
+
+| Setting | Result |
+|---------|--------|
+| no cap | 4K, **12.9 GB** |
+| `--max-height 1080` | 1080p, **2.2 GB** |
+| `--max-height 720` | 720p, **1.1 GB** |
+
+`1080` is a good default for watching on a laptop or TV; `720` if you mainly care
+about having a copy.
+
+Two more things to know:
+
+- The `--quality` option does nothing with `--video`. It sets MP3 quality, and no MP3 is being made.
+- YouTube often serves modern AV1 video that Apple's QuickTime Player cannot open, at every resolution — so `--max-height` shrinks the file but won't necessarily fix playback. [VLC](https://www.videolan.org/) plays essentially everything and is free.
+- Downloading a large video to a network drive or NAS can stall during the final merge step. Download to a local folder first, then copy the finished file across.
+
+---
+
 ## Downloading many songs at once
 
 Make a plain text file with one address per line. Lines starting with `#` are notes and are ignored, as are blank lines.
@@ -214,8 +258,10 @@ Download one video or playlist as MP3.
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--output-dir` | `-o` | current folder (or settings file) | Where to save the MP3s |
-| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst |
+| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst (MP3 only; ignored with `--video`) |
 | `--verbose` | `-v` | off | Print detailed technical output |
+| `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
+| `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
 
 ### `yotutil batch <file>`
 
@@ -224,8 +270,10 @@ Download every address listed in a text file.
 | Option | Short | Default | Description |
 |--------|-------|---------|-------------|
 | `--output-dir` | `-o` | current folder (or settings file) | Where to save the MP3s |
-| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst |
+| `--quality` | `-q` | `0` | Audio quality: `0` = best … `9` = worst (MP3 only; ignored with `--video`) |
 | `--verbose` | `-v` | off | Print detailed technical output |
+| `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
+| `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
 
 ---
 

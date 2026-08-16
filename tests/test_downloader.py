@@ -52,6 +52,46 @@ def test_build_opts_suppresses_yt_dlp_progress():
     assert opts["noprogress"] is True
 
 
+def test_build_opts_video_keeps_original_video():
+    """--video skips the MP3 transcode and merges picture + sound into one file."""
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", video=True)
+
+    assert opts["format"] == "bestvideo*+bestaudio/best"
+    assert opts["merge_output_format"] == "mp4"
+
+    keys = [pp["key"] for pp in opts["postprocessors"]]
+    assert "FFmpegExtractAudio" not in keys
+
+
+def test_build_opts_video_respects_max_height():
+    """Capping height avoids multi-GB 4K pulls for long videos."""
+    opts = build_yt_dlp_opts(
+        Config(), output_dir="/tmp/out", video=True, max_height=720
+    )
+    assert opts["format"] == "bestvideo[height<=720]+bestaudio/best[height<=720]"
+
+
+def test_build_opts_max_height_ignored_without_video():
+    """Height is meaningless when only audio is being fetched."""
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", max_height=720)
+    assert opts["format"] == "bestaudio/best"
+
+
+def test_build_opts_video_still_embeds_metadata_and_thumbnail():
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", video=True)
+
+    keys = [pp["key"] for pp in opts["postprocessors"]]
+    assert "FFmpegMetadata" in keys
+    assert "EmbedThumbnail" in keys
+
+
+def test_build_opts_audio_path_unchanged_by_video_flag():
+    """Regression: the default MP3 path must be untouched by the new option."""
+    assert build_yt_dlp_opts(Config(), output_dir="/tmp/out") == build_yt_dlp_opts(
+        Config(), output_dir="/tmp/out", video=False
+    )
+
+
 def test_build_opts_no_metadata():
     config = Config(embed_metadata=False, embed_thumbnail=False)
     opts = build_yt_dlp_opts(config)

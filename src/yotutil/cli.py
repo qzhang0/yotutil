@@ -28,6 +28,21 @@ VerboseOption = Annotated[
     bool,
     typer.Option("--verbose", "-v", help="Enable debug logging"),
 ]
+VideoOption = Annotated[
+    bool,
+    typer.Option(
+        "--video",
+        "-V",
+        help="Keep the original video (.mp4) instead of converting to MP3",
+    ),
+]
+MaxHeightOption = Annotated[
+    int | None,
+    typer.Option(
+        "--max-height",
+        help="Cap video height, e.g. 1080 or 720 (with --video; smaller files)",
+    ),
+]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -57,13 +72,15 @@ def dl(
     output_dir: OutputDirOption = None,
     quality: QualityOption = "0",
     verbose: VerboseOption = False,
+    video: VideoOption = False,
+    max_height: MaxHeightOption = None,
 ) -> None:
-    """Download a YouTube video or playlist as MP3."""
+    """Download a YouTube video or playlist as MP3, or as video with --video."""
     config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading: {url}")
     try:
-        download(url, config, output_dir=out)
+        download(url, config, output_dir=out, video=video, max_height=max_height)
         typer.echo("Done!")
     except DownloadError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -78,8 +95,10 @@ def batch(
     output_dir: OutputDirOption = None,
     quality: QualityOption = "0",
     verbose: VerboseOption = False,
+    video: VideoOption = False,
+    max_height: MaxHeightOption = None,
 ) -> None:
-    """Download multiple URLs from a text file as MP3s."""
+    """Download multiple URLs from a text file as MP3s, or as videos with --video."""
     if not file.exists():
         typer.echo(f"Error: File not found: {file}", err=True)
         raise typer.Exit(code=1)
@@ -101,7 +120,9 @@ def batch(
     for i, url in enumerate(urls, 1):
         typer.echo(f"\n[{i}/{len(urls)}] {url}")
         try:
-            download(url, config, output_dir=out)
+            download(
+                url, config, output_dir=out, video=video, max_height=max_height
+            )
         except DownloadError as e:
             typer.echo(f"  Failed: {e}", err=True)
             failed.append(url)

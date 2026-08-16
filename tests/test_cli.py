@@ -20,6 +20,25 @@ def test_dl_help():
     assert "--quality" in result.output
 
 
+def test_dl_help_offers_video_option():
+    result = runner.invoke(app, ["dl", "--help"])
+    assert result.exit_code == 0
+    assert "--video" in result.output
+
+
+def test_batch_help_offers_video_option():
+    result = runner.invoke(app, ["batch", "--help"])
+    assert result.exit_code == 0
+    assert "--video" in result.output
+
+
+def test_help_offers_max_height_option():
+    for command in ("dl", "batch"):
+        result = runner.invoke(app, [command, "--help"])
+        assert result.exit_code == 0
+        assert "--max-height" in result.output
+
+
 def test_batch_file_not_found():
     result = runner.invoke(app, ["batch", "/nonexistent/urls.txt"])
     assert result.exit_code == 1
