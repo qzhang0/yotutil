@@ -1,6 +1,7 @@
 """yt-dlp wrapper for downloading and converting to MP3."""
 
 import logging
+import re
 import shutil
 from functools import lru_cache
 
@@ -71,16 +72,31 @@ def _looks_like_stale_extractor(message: str) -> bool:
     return any(sign in msg for sign in _STALE_EXTRACTOR_SIGNS)
 
 
+# yt-dlp colours its progress strings with ANSI escapes when stdout is a
+# terminal. The escapes inflate len() without taking up screen width, so a
+# bare \r overwrite leaves coloured fragments of the previous line behind.
+_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+
+# Pad every line to a fixed width so a short line fully erases a longer one.
+_PROGRESS_WIDTH = 60
+
+
+def _plain(value: str) -> str:
+    """Strip ANSI colour codes and surrounding whitespace."""
+    return _ANSI_ESCAPE.sub("", value).strip()
+
+
 def _progress_hook(d: dict) -> None:
-    """Display download progress."""
+    """Display download progress on a single, self-erasing line."""
     if d["status"] == "downloading":
-        pct = d.get("_percent_str", "?%").strip()
-        speed = d.get("_speed_str", "?").strip()
-        eta = d.get("_eta_str", "?").strip()
-        print(f"\r  {pct} at {speed} ETA {eta}", end="", flush=True)
+        pct = _plain(d.get("_percent_str", "?%"))
+        speed = _plain(d.get("_speed_str", "?"))
+        eta = _plain(d.get("_eta_str", "?"))
+        line = f"  {pct} at {speed} ETA {eta}"
+        print("\r" + line.ljust(_PROGRESS_WIDTH), end="", flush=True)
     elif d["status"] == "finished":
         # "processing", not "converting" — with --video nothing is transcoded.
-        print("\r  Download complete, processing...", flush=True)
+        print("\r" + "  Download complete, processing...".ljust(_PROGRESS_WIDTH))
 
 
 def _video_format(max_height: int | None) -> str:

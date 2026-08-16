@@ -9,6 +9,7 @@ from yotutil.config import Config
 from yotutil.downloader import (
     DownloadError,
     _looks_like_stale_extractor,
+    _progress_hook,
     build_yt_dlp_opts,
     download,
 )
@@ -90,6 +91,39 @@ def test_build_opts_audio_path_unchanged_by_video_flag():
     assert build_yt_dlp_opts(Config(), output_dir="/tmp/out") == build_yt_dlp_opts(
         Config(), output_dir="/tmp/out", video=False
     )
+
+
+def test_progress_hook_strips_ansi_colour_codes(capsys):
+    """yt-dlp colours these in a TTY; the escapes must not reach our line."""
+    _progress_hook(
+        {
+            "status": "downloading",
+            "_percent_str": "\x1b[0;94m100.0%\x1b[0m",
+            "_speed_str": "\x1b[0;32m  10.27MiB/s\x1b[0m",
+            "_eta_str": "\x1b[0;33m00:00\x1b[0m",
+        }
+    )
+    out = capsys.readouterr().out
+    assert "\x1b[" not in out
+    assert "100.0% at 10.27MiB/s ETA 00:00" in out
+
+
+def test_progress_hook_pads_so_short_lines_erase_long_ones(capsys):
+    """A shorter line must fully overwrite a longer one, or fragments linger."""
+    _progress_hook(
+        {
+            "status": "downloading",
+            "_percent_str": "100.0%",
+            "_speed_str": "Unknown B/s",
+            "_eta_str": "Unknown",
+        }
+    )
+    long_line = capsys.readouterr().out
+
+    _progress_hook({"status": "finished"})
+    finish_line = capsys.readouterr().out
+
+    assert len(finish_line.rstrip("\n")) >= len(long_line)
 
 
 def test_build_opts_no_metadata():
