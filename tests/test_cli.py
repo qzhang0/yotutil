@@ -3,42 +3,54 @@
 import pytest
 import typer
 from typer.testing import CliRunner
+from yt_dlp.utils import remove_terminal_sequences
 
 from yotutil.cli import _validate_video_options, app
 
 runner = CliRunner()
 
 
+def _plain(result) -> str:
+    """CLI output with colour codes stripped.
+
+    Rich colours help and error output whenever it believes the destination
+    supports it — true on CI, false in a local pipe. Colouring splits strings
+    like "--video" across escape sequences, so asserting against raw output
+    passes locally and fails on CI.
+    """
+    return remove_terminal_sequences(result.output)
+
+
 def test_help():
     result = runner.invoke(app, ["--help"])
     assert result.exit_code == 0
-    assert "yotutil" in result.output.lower() or "download" in result.output.lower()
+    assert "yotutil" in _plain(result).lower() or "download" in _plain(result).lower()
 
 
 def test_dl_help():
     result = runner.invoke(app, ["dl", "--help"])
     assert result.exit_code == 0
-    assert "--output-dir" in result.output
-    assert "--quality" in result.output
+    assert "--output-dir" in _plain(result)
+    assert "--quality" in _plain(result)
 
 
 def test_dl_help_offers_video_option():
     result = runner.invoke(app, ["dl", "--help"])
     assert result.exit_code == 0
-    assert "--video" in result.output
+    assert "--video" in _plain(result)
 
 
 def test_batch_help_offers_video_option():
     result = runner.invoke(app, ["batch", "--help"])
     assert result.exit_code == 0
-    assert "--video" in result.output
+    assert "--video" in _plain(result)
 
 
 def test_help_offers_max_height_option():
     for command in ("dl", "batch"):
         result = runner.invoke(app, [command, "--help"])
         assert result.exit_code == 0
-        assert "--max-height" in result.output
+        assert "--max-height" in _plain(result)
 
 
 @pytest.mark.parametrize(
@@ -50,7 +62,7 @@ def test_dl_rejects_video_options_without_video(extra_args):
     result = runner.invoke(app, ["dl", "https://example.com/x", *extra_args])
 
     assert result.exit_code != 0
-    assert "--video" in result.output
+    assert "--video" in _plain(result)
 
 
 def test_batch_rejects_video_options_without_video(tmp_path):
@@ -60,7 +72,7 @@ def test_batch_rejects_video_options_without_video(tmp_path):
     result = runner.invoke(app, ["batch", str(urls), "--compatible"])
 
     assert result.exit_code != 0
-    assert "--video" in result.output
+    assert "--video" in _plain(result)
 
 
 def test_video_options_accepted_with_video():
