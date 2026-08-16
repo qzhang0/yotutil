@@ -24,6 +24,8 @@ uv run yotutil --help    # CLI help
 ## Gotchas
 
 - yt-dlp YouTube extraction requires `js_runtimes` and `remote_components` options — without these, downloads fail with "video not available"
+- yt-dlp's default player clients currently fail: `android_vr` 403s on media URLs, `tv` returns SABR-only formats, `web`/`ios`/`mweb` need a GVS PO token. We pin `player_client` to `web_embedded` first via `extractor_args` (`DEFAULT_PLAYER_CLIENTS`), overridable by `player_clients` in config.toml; revisit when YouTube changes
+- `noprogress` must stay on, or yt-dlp's progress bar interleaves with `_progress_hook`
 - Audio quality uses yt-dlp scale: `0` = best, `9` = worst
 
 ## Notes

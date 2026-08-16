@@ -2,6 +2,7 @@
 
 import logging
 import shutil
+from functools import lru_cache
 
 import yt_dlp
 
@@ -22,18 +23,24 @@ def check_ffmpeg() -> None:
         )
 
 
+@lru_cache(maxsize=1)
+def _available_js_runtimes() -> tuple[str, ...]:
+    """Which JS runtimes are on PATH. Cached: PATH won't change mid-run."""
+    return tuple(
+        name for name in ("deno", "node", "bun") if shutil.which(name) is not None
+    )
+
+
 def _detect_js_runtimes() -> dict:
-    """Detect available JS runtimes for yt-dlp YouTube extraction."""
-    runtimes = {}
-    for name in ("deno", "node", "bun"):
-        if shutil.which(name) is not None:
-            runtimes[name] = {}
+    """Build yt-dlp's js_runtimes option from the runtimes available on PATH."""
+    runtimes = _available_js_runtimes()
     if not runtimes:
         raise DownloadError(
             "A JavaScript runtime (deno, node, or bun) is required for YouTube downloads. "
             "Install one with: brew install node"
         )
-    return runtimes
+    # Fresh dict per call — yt-dlp takes ownership of what we hand it.
+    return {name: {} for name in runtimes}
 
 
 # Extraction failures that usually mean yt-dlp itself is out of date rather than
@@ -46,6 +53,16 @@ _STALE_EXTRACTOR_SIGNS = (
     "nsig extraction failed",
     "sign in to confirm",
 )
+
+
+# YouTube serves different format sets to different player clients, and the ones
+# yt-dlp picks by default currently fail: `android_vr` returns media URLs that
+# 403, `tv` yields SABR-only formats with no URL, and `web`/`ios`/`mweb` require a
+# GVS PO token we don't have. `web_embedded` still returns plain HTTPS audio
+# formats, so try it first and leave the rest as fallbacks for when that changes.
+# This list WILL rot as YouTube changes; `player_clients` in config.toml lets a
+# user work around the next breakage without waiting for a release.
+DEFAULT_PLAYER_CLIENTS = ["web_embedded", "tv", "android_vr", "default"]
 
 
 def _looks_like_stale_extractor(message: str) -> bool:
@@ -62,7 +79,7 @@ def _progress_hook(d: dict) -> None:
         eta = d.get("_eta_str", "?").strip()
         print(f"\r  {pct} at {speed} ETA {eta}", end="", flush=True)
     elif d["status"] == "finished":
-        print(f"\r  Download complete, converting...", flush=True)
+        print("\r  Download complete, converting...", flush=True)
 
 
 def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
@@ -82,9 +99,15 @@ def build_yt_dlp_opts(config: Config, output_dir: str | None = None) -> dict:
         "progress_hooks": [_progress_hook],
         "quiet": not logger.isEnabledFor(logging.DEBUG),
         "no_warnings": not logger.isEnabledFor(logging.DEBUG),
+        # We render our own progress via _progress_hook; without this yt-dlp
+        # prints its bar too and the two interleave on the same line.
+        "noprogress": True,
         # yt-dlp requires a JS runtime + EJS solver for YouTube extraction
         "js_runtimes": _detect_js_runtimes(),
         "remote_components": {"ejs:github": {}},
+        "extractor_args": {
+            "youtube": {"player_client": config.player_clients or DEFAULT_PLAYER_CLIENTS}
+        },
     }
 
     if config.embed_metadata:
@@ -111,7 +134,10 @@ def download(url: str, config: Config, output_dir: str | None = None) -> None:
         msg = f"Download failed: {e}"
         if _looks_like_stale_extractor(str(e)):
             msg += (
-                " — if the video plays in a browser, your yt-dlp may be out of "
-                "date; update with: uv sync --upgrade-package yt-dlp"
+                " — if the video plays in a browser, your yt-dlp is probably out "
+                "of date. Update with: uv tool upgrade yotutil "
+                "(or, in a checkout: uv sync --upgrade-package yt-dlp). "
+                "If updating doesn't help, try setting player_clients in "
+                "~/.config/yotutil/config.toml"
             )
         raise DownloadError(msg) from e

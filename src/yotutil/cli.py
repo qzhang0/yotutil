@@ -2,11 +2,11 @@
 
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
-from yotutil.config import load_config
+from yotutil.config import Config, load_config
 from yotutil.downloader import DownloadError, download
 
 app = typer.Typer(
@@ -14,6 +14,20 @@ app = typer.Typer(
     help="Download YouTube music videos as MP3 files.",
     no_args_is_help=True,
 )
+
+# Shared by every command, so the flags and help text are declared once.
+OutputDirOption = Annotated[
+    str | None,
+    typer.Option("--output-dir", "-o", help="Output directory for MP3 files"),
+]
+QualityOption = Annotated[
+    str,
+    typer.Option("--quality", "-q", help="Audio quality (0=best, 9=worst)"),
+]
+VerboseOption = Annotated[
+    bool,
+    typer.Option("--verbose", "-v", help="Enable debug logging"),
+]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -24,29 +38,28 @@ def _setup_logging(verbose: bool) -> None:
     )
 
 
-@app.command()
-def dl(
-    url: Annotated[str, typer.Argument(help="YouTube video or playlist URL")],
-    output_dir: Annotated[
-        Optional[str],
-        typer.Option("--output-dir", "-o", help="Output directory for MP3 files"),
-    ] = None,
-    quality: Annotated[
-        str,
-        typer.Option("--quality", "-q", help="Audio quality (0=best, 9=worst)"),
-    ] = "0",
-    verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Enable debug logging"),
-    ] = False,
-) -> None:
-    """Download a YouTube video or playlist as MP3."""
+def _prepare(
+    output_dir: str | None, quality: str, verbose: bool
+) -> tuple[Config, str]:
+    """Apply CLI overrides to the loaded config and ensure the output dir exists."""
     _setup_logging(verbose)
     config = load_config()
     config.audio_quality = quality
 
     out = output_dir or config.output_dir
     Path(out).mkdir(parents=True, exist_ok=True)
+    return config, out
+
+
+@app.command()
+def dl(
+    url: Annotated[str, typer.Argument(help="YouTube video or playlist URL")],
+    output_dir: OutputDirOption = None,
+    quality: QualityOption = "0",
+    verbose: VerboseOption = False,
+) -> None:
+    """Download a YouTube video or playlist as MP3."""
+    config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading: {url}")
     try:
@@ -62,22 +75,11 @@ def batch(
     file: Annotated[
         Path, typer.Argument(help="Text file with one URL per line")
     ],
-    output_dir: Annotated[
-        Optional[str],
-        typer.Option("--output-dir", "-o", help="Output directory for MP3 files"),
-    ] = None,
-    quality: Annotated[
-        str,
-        typer.Option("--quality", "-q", help="Audio quality (0=best, 9=worst)"),
-    ] = "0",
-    verbose: Annotated[
-        bool,
-        typer.Option("--verbose", "-v", help="Enable debug logging"),
-    ] = False,
+    output_dir: OutputDirOption = None,
+    quality: QualityOption = "0",
+    verbose: VerboseOption = False,
 ) -> None:
     """Download multiple URLs from a text file as MP3s."""
-    _setup_logging(verbose)
-
     if not file.exists():
         typer.echo(f"Error: File not found: {file}", err=True)
         raise typer.Exit(code=1)
@@ -92,11 +94,7 @@ def batch(
         typer.echo("No URLs found in file.")
         raise typer.Exit(code=1)
 
-    config = load_config()
-    config.audio_quality = quality
-
-    out = output_dir or config.output_dir
-    Path(out).mkdir(parents=True, exist_ok=True)
+    config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading {len(urls)} URL(s)...")
     failed = []
