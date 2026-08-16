@@ -1,0 +1,33 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Required, not optional: build_yt_dlp_opts() probes for a JS runtime
+      # because yt-dlp needs one for YouTube extraction. Without node on PATH,
+      # 18 of the tests fail before they assert anything.
+      - name: Install a JS runtime
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # uv.lock is gitignored, so resolve fresh instead of using --frozen.
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run tests
+        run: uv run pytest tests/ -v

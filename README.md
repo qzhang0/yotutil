@@ -2,6 +2,7 @@
 
 Save YouTube and YouTube Music videos to your computer as MP3 files, with the song title, artist, and cover art already filled in.
 
+[![tests](https://github.com/qzhang0/yotutil/actions/workflows/tests.yml/badge.svg)](https://github.com/qzhang0/yotutil/actions/workflows/tests.yml)
 ![Python 3.13+](https://img.shields.io/badge/python-3.13%2B-blue)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
