@@ -78,6 +78,30 @@ def test_build_opts_max_height_ignored_without_video():
     assert opts["format"] == "bestaudio/best"
 
 
+def test_build_opts_compatible_prefers_h264():
+    """QuickTime and older players can't open AV1; prefer avc1/mp4a when asked."""
+    opts = build_yt_dlp_opts(
+        Config(), output_dir="/tmp/out", video=True, compatible=True
+    )
+    assert opts["format"].startswith("bestvideo[vcodec^=avc1]")
+    assert "bestaudio[acodec^=mp4a]" in opts["format"]
+    # Must still fall back to anything playable if H.264 isn't offered.
+    assert opts["format"].endswith("/best")
+
+
+def test_build_opts_compatible_combines_with_max_height():
+    opts = build_yt_dlp_opts(
+        Config(), output_dir="/tmp/out", video=True, compatible=True, max_height=720
+    )
+    assert "vcodec^=avc1" in opts["format"]
+    assert "height<=720" in opts["format"]
+
+
+def test_build_opts_compatible_ignored_without_video():
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", compatible=True)
+    assert opts["format"] == "bestaudio/best"
+
+
 def test_build_opts_video_still_embeds_metadata_and_thumbnail():
     opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out", video=True)
 
@@ -87,9 +111,9 @@ def test_build_opts_video_still_embeds_metadata_and_thumbnail():
 
 
 def test_build_opts_audio_path_unchanged_by_video_flag():
-    """Regression: the default MP3 path must be untouched by the new option."""
+    """Regression: the default MP3 path must be untouched by the new options."""
     assert build_yt_dlp_opts(Config(), output_dir="/tmp/out") == build_yt_dlp_opts(
-        Config(), output_dir="/tmp/out", video=False
+        Config(), output_dir="/tmp/out", video=False, max_height=None, compatible=False
     )
 
 

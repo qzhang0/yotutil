@@ -43,6 +43,14 @@ MaxHeightOption = Annotated[
         help="Cap video height, e.g. 1080 or 720 (with --video; smaller files)",
     ),
 ]
+CompatibleOption = Annotated[
+    bool,
+    typer.Option(
+        "--compatible",
+        "-c",
+        help="Prefer H.264/AAC so the video plays in QuickTime (with --video)",
+    ),
+]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -74,13 +82,21 @@ def dl(
     verbose: VerboseOption = False,
     video: VideoOption = False,
     max_height: MaxHeightOption = None,
+    compatible: CompatibleOption = False,
 ) -> None:
     """Download a YouTube video or playlist as MP3, or as video with --video."""
     config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading: {url}")
     try:
-        download(url, config, output_dir=out, video=video, max_height=max_height)
+        download(
+            url,
+            config,
+            output_dir=out,
+            video=video,
+            max_height=max_height,
+            compatible=compatible,
+        )
         typer.echo("Done!")
     except DownloadError as e:
         typer.echo(f"Error: {e}", err=True)
@@ -97,6 +113,7 @@ def batch(
     verbose: VerboseOption = False,
     video: VideoOption = False,
     max_height: MaxHeightOption = None,
+    compatible: CompatibleOption = False,
 ) -> None:
     """Download multiple URLs from a text file as MP3s, or as videos with --video."""
     if not file.exists():
@@ -121,7 +138,12 @@ def batch(
         typer.echo(f"\n[{i}/{len(urls)}] {url}")
         try:
             download(
-                url, config, output_dir=out, video=video, max_height=max_height
+                url,
+                config,
+                output_dir=out,
+                video=video,
+                max_height=max_height,
+                compatible=compatible,
             )
         except DownloadError as e:
             typer.echo(f"  Failed: {e}", err=True)

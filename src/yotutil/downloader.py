@@ -99,14 +99,22 @@ def _progress_hook(d: dict) -> None:
         print("\r" + "  Download complete, processing...".ljust(_PROGRESS_WIDTH))
 
 
-def _video_format(max_height: int | None) -> str:
-    """Format selector for video mode, optionally capped by frame height."""
+def _video_format(max_height: int | None, compatible: bool = False) -> str:
+    """Format selector for video mode, optionally capped and/or codec-limited."""
+    height = f"[height<={max_height}]" if max_height is not None else ""
+    if compatible:
+        # H.264 video + AAC audio is the combination essentially every player
+        # opens, including QuickTime. Fall back to anything if YouTube doesn't
+        # offer it for this video.
+        return (
+            f"bestvideo[vcodec^=avc1]{height}+bestaudio[acodec^=mp4a]/"
+            f"bestvideo{height}+bestaudio/best"
+        )
     if max_height is None:
         return "bestvideo*+bestaudio/best"
-    # Uncapped, a long 4K video can run to tens of GB. This caps size only —
-    # YouTube often serves AV1 at every height, so it does not guarantee a
-    # more widely-playable codec.
-    return f"bestvideo[height<={max_height}]+bestaudio/best[height<={max_height}]"
+    # Caps size only — YouTube often serves AV1 at every height, so this does
+    # not by itself guarantee a more widely-playable codec.
+    return f"bestvideo{height}+bestaudio/best{height}"
 
 
 def build_yt_dlp_opts(
@@ -114,18 +122,22 @@ def build_yt_dlp_opts(
     output_dir: str | None = None,
     video: bool = False,
     max_height: int | None = None,
+    compatible: bool = False,
 ) -> dict:
     """Build yt-dlp options dict from config.
 
     With `video`, keep the original video instead of extracting audio: pull the
     best video+audio streams and mux them, skipping the MP3 transcode entirely.
-    `config.audio_quality` is an MP3 setting and has no effect in this mode, and
-    `max_height` only applies there — audio streams have no frame height.
+    `config.audio_quality` is an MP3 setting and has no effect in this mode.
+    `max_height` and `compatible` only apply there too — audio streams have
+    neither a frame height nor a video codec.
     """
     out = output_dir or config.output_dir
 
     opts: dict = {
-        "format": _video_format(max_height) if video else "bestaudio/best",
+        "format": (
+            _video_format(max_height, compatible) if video else "bestaudio/best"
+        ),
         "postprocessors": [],
         "outtmpl": f"{out}/%(title)s.%(ext)s",
         "progress_hooks": [_progress_hook],
@@ -170,11 +182,18 @@ def download(
     output_dir: str | None = None,
     video: bool = False,
     max_height: int | None = None,
+    compatible: bool = False,
 ) -> None:
     """Download a single URL (video or playlist), as MP3 unless `video` is set."""
     check_ffmpeg()
 
-    opts = build_yt_dlp_opts(config, output_dir, video=video, max_height=max_height)
+    opts = build_yt_dlp_opts(
+        config,
+        output_dir,
+        video=video,
+        max_height=max_height,
+        compatible=compatible,
+    )
     logger.debug("yt-dlp options: %s", opts)
 
     try:

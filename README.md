@@ -180,10 +180,27 @@ Measured on one 83-minute 4K concert video:
 `1080` is a good default for watching on a laptop or TV; `720` if you mainly care
 about having a copy.
 
+### If the video won't play
+
+YouTube usually serves a modern format called AV1, which Apple's QuickTime
+Player cannot open at any resolution. Add `--compatible` to get the older,
+universally supported H.264 format instead:
+
+```bash
+yotutil dl "https://www.youtube.com/watch?v=..." --video --compatible
+```
+
+The file will be somewhat larger for the same quality — on the concert above,
+1080p grows from 2.2 GB to 3.2 GB — because the older format compresses less
+efficiently. If YouTube doesn't offer H.264 for a particular video, yotutil
+falls back to the best available rather than failing.
+
+The alternative is to keep the smaller file and use [VLC](https://www.videolan.org/),
+which is free and plays essentially anything.
+
 Two more things to know:
 
 - The `--quality` option does nothing with `--video`. It sets MP3 quality, and no MP3 is being made.
-- YouTube often serves modern AV1 video that Apple's QuickTime Player cannot open, at every resolution — so `--max-height` shrinks the file but won't necessarily fix playback. [VLC](https://www.videolan.org/) plays essentially everything and is free.
 - Downloading a large video to a network drive or NAS can stall during the final merge step. Download to a local folder first, then copy the finished file across.
 
 ---
@@ -262,6 +279,7 @@ Download one video or playlist as MP3.
 | `--verbose` | `-v` | off | Print detailed technical output |
 | `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
 | `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
+| `--compatible` | `-c` | off | Prefer H.264/AAC so the file plays in QuickTime (with `--video`) |
 
 ### `yotutil batch <file>`
 
@@ -274,6 +292,7 @@ Download every address listed in a text file.
 | `--verbose` | `-v` | off | Print detailed technical output |
 | `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
 | `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
+| `--compatible` | `-c` | off | Prefer H.264/AAC so the file plays in QuickTime (with `--video`) |
 
 ---
 
