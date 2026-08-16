@@ -9,7 +9,7 @@ authors = [
 ]
 requires-python = ">=3.13"
 dependencies = [
-    "yt-dlp>=2026.6.9",
+    "yt-dlp>=2026.7.4",
     "typer>=0.15.0",
 ]
 

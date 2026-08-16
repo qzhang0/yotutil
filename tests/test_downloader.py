@@ -29,6 +29,29 @@ def test_build_opts_default():
     assert opts["writethumbnail"] is True
 
 
+def test_build_opts_pins_working_player_clients():
+    """YouTube 403s / SABR-blocks yt-dlp's default clients; we pin known-good ones."""
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out")
+
+    clients = opts["extractor_args"]["youtube"]["player_client"]
+    assert clients[0] == "web_embedded"
+    assert "default" in clients  # fallback retained
+
+
+def test_build_opts_player_clients_overridable_from_config():
+    """Users must be able to route around the next YouTube breakage themselves."""
+    config = Config(player_clients=["ios", "web"])
+    opts = build_yt_dlp_opts(config, output_dir="/tmp/out")
+
+    assert opts["extractor_args"]["youtube"]["player_client"] == ["ios", "web"]
+
+
+def test_build_opts_suppresses_yt_dlp_progress():
+    """Our own progress hook renders progress; yt-dlp's bar would interleave."""
+    opts = build_yt_dlp_opts(Config(), output_dir="/tmp/out")
+    assert opts["noprogress"] is True
+
+
 def test_build_opts_no_metadata():
     config = Config(embed_metadata=False, embed_thumbnail=False)
     opts = build_yt_dlp_opts(config)
@@ -90,6 +113,8 @@ def test_download_appends_hint_on_stale_extractor(_mock_ffmpeg):
         patch.stopall()
 
     assert "out of date" in str(exc.value)
+    # Both the installed-tool and checkout upgrade paths are offered.
+    assert "uv tool upgrade yotutil" in str(exc.value)
     assert "uv sync --upgrade-package yt-dlp" in str(exc.value)
 
 
