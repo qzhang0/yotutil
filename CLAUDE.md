@@ -16,7 +16,7 @@ runtime, and 18 tests fail without one on PATH.
 
 ## Architecture
 
-- `src/yotutil/cli.py` — Typer CLI entry point (`dl`, `batch [--yoto]`, `yoto login`, `yoto upload`)
+- `src/yotutil/cli.py` — Typer CLI entry point (`dl`, `batch [--yoto]`, `yoto login`, `yoto upload`, `yoto icons`)
 - `src/yotutil/downloader.py` — yt-dlp Python API wrapper (format selection, download, convert/mux, progress and stage reporting)
 - `src/yotutil/config.py` — TOML config loading from `~/.config/yotutil/config.toml`
 - `src/yotutil/yoto.py` — Yoto API client (stdlib only): PKCE login, upload + transcode poll, icons (built-in search, custom upload), cover upload, playlist create. All HTTP goes through `_request`, which tests replace
