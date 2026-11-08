@@ -153,6 +153,18 @@ def dl(
         raise typer.Exit(code=1)
 
 
+def _parse_batch_file(text: str) -> list[tuple[str, str | None]]:
+    """(url, optional track name) for each non-blank, non-comment line."""
+    entries = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        url, *rest = line.split(maxsplit=1)
+        entries.append((url, rest[0] if rest else None))
+    return entries
+
+
 @app.command()
 def batch(
     file: Annotated[
@@ -164,32 +176,41 @@ def batch(
     video: VideoOption = False,
     max_height: MaxHeightOption = None,
     compatible: CompatibleOption = False,
+    yoto_title: Annotated[
+        str | None,
+        typer.Option(
+            "--yoto",
+            help="Then upload the MP3s to Yoto as a new playlist with this title",
+        ),
+    ] = None,
 ) -> None:
-    """Download multiple URLs from a text file as MP3s, or as videos with --video."""
+    """Download multiple URLs from a text file as MP3s, or as videos with --video.
+
+    Each line is a URL, optionally followed by a space and a track name for
+    Yoto, e.g. "https://youtu.be/abc 小红帽". Lines starting with # are skipped.
+    """
     _validate_output_options(video, max_height, compatible, quality)
+    if yoto_title is not None and video:
+        raise typer.BadParameter("--yoto uploads MP3s and can't be used with --video.")
 
     if not file.exists():
         typer.echo(f"Error: File not found: {file}", err=True)
         raise typer.Exit(code=1)
 
-    urls = [
-        line.strip()
-        for line in file.read_text().splitlines()
-        if line.strip() and not line.strip().startswith("#")
-    ]
-
-    if not urls:
+    entries = _parse_batch_file(file.read_text())
+    if not entries:
         typer.echo("No URLs found in file.")
         raise typer.Exit(code=1)
 
     config, out = _prepare(output_dir, quality, verbose)
 
-    typer.echo(f"Downloading {len(urls)} URL(s)...")
+    typer.echo(f"Downloading {len(entries)} URL(s)...")
     failed = []
-    for i, url in enumerate(urls, 1):
-        typer.echo(f"\n[{i}/{len(urls)}] {url}")
+    to_upload: list[tuple[Path, str]] = []
+    for i, (url, name) in enumerate(entries, 1):
+        typer.echo(f"\n[{i}/{len(entries)}] {url}")
         try:
-            download(
+            paths = download(
                 url,
                 config,
                 output_dir=out,
@@ -200,14 +221,23 @@ def batch(
         except DownloadError as e:
             typer.echo(f"  Failed: {e}", err=True)
             failed.append(url)
+            continue
+        # A name only fits a single song; a playlist URL keeps its file names.
+        for path in map(Path, paths):
+            to_upload.append((path, name if name and len(paths) == 1 else path.stem))
 
     if failed:
         typer.echo(f"\n{len(failed)} download(s) failed:")
         for url in failed:
             typer.echo(f"  - {url}")
+        if yoto_title is not None:
+            typer.echo("Nothing was uploaded to Yoto. Fix or remove these and run again.")
         raise typer.Exit(code=1)
 
     typer.echo("\nAll downloads complete!")
+    if yoto_title is not None:
+        typer.echo("\nUploading to Yoto...")
+        _send_to_yoto(yoto_title, to_upload)
 
 
 def _yoto_client_id() -> str:
@@ -242,34 +272,35 @@ def upload(
         typer.Argument(help="Audio files, in playlist order", exists=True, dir_okay=False),
     ],
     title: Annotated[str, typer.Option("--title", "-t", help="Playlist title")],
-    card_id: Annotated[
-        str | None,
-        typer.Option("--card-id", help="Replace the tracks of this existing playlist"),
-    ] = None,
     verbose: VerboseOption = False,
 ) -> None:
-    """Upload audio files to Yoto as one Make Your Own playlist.
+    """Upload audio files to Yoto as a new Make Your Own playlist.
 
     Track names are the file names without the extension.
     """
     _setup_logging(verbose)
+    _send_to_yoto(title, [(path, path.stem) for path in files])
+
+
+def _send_to_yoto(title: str, items: list[tuple[Path, str]]) -> None:
+    """Upload (file, track name) pairs in order, then create one playlist."""
     client_id = _yoto_client_id()
     try:
         tracks = []
-        for i, path in enumerate(files, 1):
-            typer.echo(f"[{i}/{len(files)}] Uploading {path.stem}...")
+        for i, (path, name) in enumerate(items, 1):
+            typer.echo(f"[{i}/{len(items)}] Uploading {name}...")
             # Fetched per file: a long upload can outlast one access token.
-            tracks.append(yoto.upload_track(path, yoto.access_token(client_id)))
+            tracks.append(
+                yoto.upload_track(path, yoto.access_token(client_id), title=name)
+            )
         typer.echo(f"Creating playlist '{title}'...")
-        new_id = yoto.create_playlist(
-            title, tracks, yoto.access_token(client_id), card_id=card_id
-        )
+        new_id = yoto.create_playlist(title, tracks, yoto.access_token(client_id))
     except yoto.YotoError as e:
         typer.echo(f"Error: {e}", err=True)
-        typer.echo("No playlist was created or changed.", err=True)
+        typer.echo("No playlist was created.", err=True)
         raise typer.Exit(code=1)
 
     typer.echo(
-        f"Done! Playlist '{title}' has {len(tracks)} track(s) (card ID {new_id}). "
-        "Link it to a card in the Yoto app."
+        f"Done! New Yoto playlist '{title}' has {len(tracks)} track(s) "
+        f"(card ID {new_id}). Link it to a card in the Yoto app."
     )

@@ -246,6 +246,7 @@ def upload_track(
     path: Path,
     token: str,
     *,
+    title: str | None = None,
     timeout: float = 120,
     interval: float = 1,
     sleep=time.sleep,
@@ -253,8 +254,8 @@ def upload_track(
 ) -> Track:
     """Upload one audio file and wait for Yoto to transcode it.
 
-    The track title is the file name without its extension, so long YouTube
-    titles saved inside the MP3 don't reach the Yoto app.
+    The track title is `title`, or else the file name without its extension,
+    so long YouTube titles saved inside the MP3 don't reach the Yoto app.
     """
     resp = _request("GET", f"{API_BASE}/media/transcode/audio/uploadUrl", headers=_auth_headers(token))
     upload = (resp or {}).get("upload") or {}
@@ -277,7 +278,7 @@ def upload_track(
         if transcode.get("transcodedSha256"):
             info = transcode.get("transcodedInfo") or {}
             return Track(
-                title=path.stem,
+                title=title or path.stem,
                 sha256=transcode["transcodedSha256"],
                 duration=info.get("duration") or 0,
                 file_size=info.get("fileSize") or 0,
@@ -289,7 +290,7 @@ def upload_track(
         sleep(interval)
 
 
-def build_content(title: str, tracks: list[Track], card_id: str | None = None) -> dict:
+def build_content(title: str, tracks: list[Track]) -> dict:
     """The POST /content body for a playlist with one chapter per track."""
     chapters = []
     for i, t in enumerate(tracks, 1):
@@ -323,20 +324,20 @@ def build_content(title: str, tracks: list[Track], card_id: str | None = None) -
             }
         },
     }
-    if card_id:
-        body["cardId"] = card_id
     return body
 
 
-def create_playlist(
-    title: str, tracks: list[Track], token: str, card_id: str | None = None
-) -> str:
-    """Create (or, with card_id, replace) a playlist. Returns its card ID."""
+def create_playlist(title: str, tracks: list[Track], token: str) -> str:
+    """Create a new playlist and return its card ID.
+
+    Always creates; never updates. Sending a cardId would replace that
+    playlist's whole track list, silently dropping songs already on it.
+    """
     resp = _request(
         "POST",
         f"{API_BASE}/content",
         headers={**_auth_headers(token), "Content-Type": "application/json"},
-        data=json.dumps(build_content(title, tracks, card_id)).encode(),
+        data=json.dumps(build_content(title, tracks)).encode(),
     )
     new_id = ((resp or {}).get("card") or {}).get("cardId")
     if not new_id:

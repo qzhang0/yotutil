@@ -207,10 +207,19 @@ def test_build_content_one_chapter_per_track_in_order():
     }
 
 
-def test_build_content_with_card_id_updates_existing_playlist():
-    body = yoto.build_content("t", [yoto.Track("a", "s", 1, 1, None, None)], card_id="C1")
-    assert body["cardId"] == "C1"
+def test_build_content_never_targets_an_existing_playlist():
+    # A cardId would replace that playlist's tracks, dropping songs already on it.
+    body = yoto.build_content("t", [yoto.Track("a", "s", 1, 1, None, None)])
+    assert "cardId" not in body
     assert "channels" not in body["content"]["chapters"][0]["tracks"][0]
+
+
+def test_upload_track_uses_given_title_over_file_name(tmp_path, calls):
+    song = tmp_path / "兔小贝儿歌 484 小红帽 ｜儿歌大全.mp3"
+    song.write_bytes(b"x")
+    calls.replies = [{"upload": {"uploadUrl": None, "uploadId": "U1"}}, _done()]
+    track = yoto.upload_track(song, "TOK", title="小红帽", sleep=lambda s: None)
+    assert track.title == "小红帽"
 
 
 def test_create_playlist_posts_json_and_returns_card_id(calls):
