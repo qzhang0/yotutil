@@ -272,3 +272,18 @@ def test_download_no_hint_on_unrelated_failure(_mock_ffmpeg):
         patch.stopall()
 
     assert "out of date" not in str(exc.value)
+
+
+def test_file_collector_records_final_paths_once_in_order():
+    from yotutil.downloader import _FileCollector
+
+    c = _FileCollector()
+    for event in [
+        {"postprocessor": "ExtractAudio", "status": "finished", "info_dict": {"filepath": "/x.webm"}},
+        {"postprocessor": "MoveFiles", "status": "started", "info_dict": {"filepath": "/a.mp3"}},
+        {"postprocessor": "MoveFiles", "status": "finished", "info_dict": {"filepath": "/a.mp3"}},
+        {"postprocessor": "MoveFiles", "status": "finished", "info_dict": {"filepath": "/a.mp3"}},
+        {"postprocessor": "MoveFiles", "status": "finished", "info_dict": {"filepath": "/b.mp3"}},
+    ]:
+        c(event)
+    assert c.paths == ["/a.mp3", "/b.mp3"]

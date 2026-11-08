@@ -132,6 +132,24 @@ class _PostprocessorReporter:
         print("\r" + f"  {label}...".ljust(_PROGRESS_WIDTH))
 
 
+class _FileCollector:
+    """Record the final path of every file a download produces.
+
+    MoveFiles is the last postprocessor, so its `filepath` is the file as it
+    sits on disk after conversion. Like other stages it can fire twice.
+    """
+
+    def __init__(self) -> None:
+        self.paths: list[str] = []
+
+    def __call__(self, d: dict) -> None:
+        if d.get("status") != "finished" or d.get("postprocessor") != "MoveFiles":
+            return
+        path = (d.get("info_dict") or {}).get("filepath")
+        if path and path not in self.paths:
+            self.paths.append(path)
+
+
 def _video_format(max_height: int | None, compatible: bool = False) -> str:
     """Format selector for video mode, optionally capped and/or codec-limited."""
     height = f"[height<={max_height}]" if max_height is not None else ""
@@ -217,8 +235,11 @@ def download(
     video: bool = False,
     max_height: int | None = None,
     compatible: bool = False,
-) -> None:
-    """Download a single URL (video or playlist), as MP3 unless `video` is set."""
+) -> list[str]:
+    """Download a single URL (video or playlist), as MP3 unless `video` is set.
+
+    Returns the paths of the files written, in download order.
+    """
     check_ffmpeg()
 
     opts = build_yt_dlp_opts(
@@ -229,6 +250,8 @@ def download(
         compatible=compatible,
     )
     logger.debug("yt-dlp options: %s", opts)
+    collector = _FileCollector()
+    opts["postprocessor_hooks"].append(collector)
 
     try:
         with yt_dlp.YoutubeDL(opts) as ydl:
@@ -244,3 +267,4 @@ def download(
                 "~/.config/yotutil/config.toml"
             )
         raise DownloadError(msg) from e
+    return collector.paths
