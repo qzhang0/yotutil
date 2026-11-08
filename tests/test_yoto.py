@@ -229,3 +229,103 @@ def test_create_playlist_posts_json_and_returns_card_id(calls):
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"].endswith("/content")
     assert json.loads(calls[0]["data"])["title"] == "t"
+
+
+# --- Icons and cover images --------------------------------------------------
+
+PNG = b"\x89PNG\r\n\x1a\n" + b"rest"
+JPEG = b"\xff\xd8\xff\xe0" + b"rest"
+
+ICONS = [
+    {"mediaId": "M1", "title": "Moon boat", "publicTags": ["space"]},
+    {"mediaId": "M2", "title": "Sailing", "publicTags": ["boat", "sea"]},
+    {"mediaId": "M3", "title": "Boat", "publicTags": []},
+    {"mediaId": "M4", "title": "Car", "publicTags": ["vehicle"]},
+]
+
+
+def test_search_icons_ranks_title_then_tag_then_partial_title():
+    assert [i["mediaId"] for i in yoto.search_icons(ICONS, "Boat")] == ["M3", "M2", "M1"]
+    assert yoto.search_icons(ICONS, "plane") == []
+
+
+def test_resolve_icon_reference_passes_through(calls):
+    assert yoto.resolve_icon("yoto:#abc", "TOK", ICONS) == "yoto:#abc"
+    assert calls == []
+
+
+def test_resolve_icon_word_picks_best_builtin_icon(calls):
+    assert yoto.resolve_icon(" boat ", "TOK", ICONS) == "yoto:#M3"
+
+
+def test_resolve_icon_unknown_word_says_how_to_search():
+    with pytest.raises(yoto.YotoError, match="yotutil yoto icons"):
+        yoto.resolve_icon("unicorn", "TOK", ICONS)
+
+
+def test_resolve_icon_image_file_is_uploaded_as_custom_icon(tmp_path, calls):
+    png = tmp_path / "moon.png"
+    png.write_bytes(PNG)
+    calls.replies = [{"displayIcon": {"mediaId": "CUSTOM"}}]
+
+    assert yoto.resolve_icon(str(png), "TOK", ICONS) == "yoto:#CUSTOM"
+
+    call = calls[0]
+    assert call["method"] == "POST"
+    assert "/media/displayIcons/user/me/upload?" in call["url"]
+    assert "autoConvert=true" in call["url"]
+    # Raw bytes: Yoto rejects the multipart upload its docs describe.
+    assert call["headers"]["Content-Type"] == "image/png"
+    assert call["data"] == PNG
+
+
+def test_upload_icon_rejects_non_images(tmp_path):
+    f = tmp_path / "notes.txt"
+    f.write_text("x")
+    with pytest.raises(yoto.YotoError, match="image"):
+        yoto.upload_icon(f, "TOK")
+
+
+def test_upload_cover_sends_image_and_returns_url(tmp_path, calls):
+    jpg = tmp_path / "cover.jpg"
+    jpg.write_bytes(JPEG)
+    calls.replies = [{"coverImage": {"mediaId": "C", "mediaUrl": "https://cdn/cover"}}]
+
+    assert yoto.upload_cover(str(jpg), "TOK") == "https://cdn/cover"
+    assert "/media/coverImage/user/me/upload?" in calls[0]["url"]
+    assert "autoconvert=true" in calls[0]["url"]
+    assert calls[0]["headers"]["Content-Type"] == "image/jpeg"
+    assert calls[0]["data"] == JPEG
+
+
+def test_image_type_comes_from_bytes_not_file_name(tmp_path, calls):
+    # Embedded MP3 artwork saved as "cover.jpg" is often really a PNG.
+    fake_jpg = tmp_path / "cover.jpg"
+    fake_jpg.write_bytes(PNG)
+    calls.replies = [{"coverImage": {"mediaUrl": "u"}}]
+    yoto.upload_cover(str(fake_jpg), "TOK")
+    assert calls[0]["headers"]["Content-Type"] == "image/png"
+
+
+def test_upload_cover_missing_file_is_a_clear_error():
+    with pytest.raises(yoto.YotoError, match="not found"):
+        yoto.upload_cover("/nope/cover.jpg", "TOK")
+
+
+def test_build_content_sets_icon_on_chapter_and_track_and_cover():
+    tracks = [
+        yoto.Track("a", "s1", 1, 1, None, None, icon="yoto:#I1"),
+        yoto.Track("b", "s2", 1, 1, None, None),
+    ]
+    body = yoto.build_content("t", tracks, cover_url="https://cdn/c")
+
+    first, second = body["content"]["chapters"]
+    assert first["display"] == {"icon16x16": "yoto:#I1"}
+    assert first["tracks"][0]["display"] == {"icon16x16": "yoto:#I1"}
+    assert "display" not in second
+    assert body["metadata"]["cover"] == {"imageL": "https://cdn/c"}
+
+
+def test_build_content_without_cover_has_no_cover_key():
+    body = yoto.build_content("t", [yoto.Track("a", "s", 1, 1, None, None)])
+    assert "cover" not in body["metadata"]

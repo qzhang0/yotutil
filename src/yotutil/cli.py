@@ -1,6 +1,7 @@
 """CLI entry point using Typer."""
 
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
@@ -153,16 +154,40 @@ def dl(
         raise typer.Exit(code=1)
 
 
-def _parse_batch_file(text: str) -> list[tuple[str, str | None]]:
-    """(url, optional track name) for each non-blank, non-comment line."""
+@dataclass
+class _BatchLine:
+    url: str
+    name: str | None = None  # Yoto track name
+    icon: str | None = None  # Yoto icon: built-in icon word, image path, or yoto:#id
+
+
+def _parse_batch_file(text: str) -> list[_BatchLine]:
+    """Parse "URL [track name] [| icon]" lines, skipping blanks and # comments."""
     entries = []
     for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
+        line, bar, icon = line.partition("|")
         url, *rest = line.split(maxsplit=1)
-        entries.append((url, rest[0] if rest else None))
+        name = rest[0].strip() if rest else ""
+        entries.append(_BatchLine(url, name or None, icon.strip() or None if bar else None))
     return entries
+
+
+# Shared by `batch --yoto` and `yoto upload`.
+IconOption = Annotated[
+    str | None,
+    typer.Option(
+        "--icon",
+        help="Yoto icon for tracks without their own: a word to search Yoto's "
+        "built-in icons (see `yotutil yoto icons`), or an image file",
+    ),
+]
+CoverOption = Annotated[
+    str | None,
+    typer.Option("--cover", help="Playlist cover image: a file or an image URL"),
+]
 
 
 @app.command()
@@ -183,15 +208,19 @@ def batch(
             help="Then upload the MP3s to Yoto as a new playlist with this title",
         ),
     ] = None,
+    icon: IconOption = None,
+    cover: CoverOption = None,
 ) -> None:
     """Download multiple URLs from a text file as MP3s, or as videos with --video.
 
-    Each line is a URL, optionally followed by a space and a track name for
-    Yoto, e.g. "https://youtu.be/abc 小红帽". Lines starting with # are skipped.
+    Each line is a URL, optionally followed by a track name and an icon for
+    Yoto: "https://youtu.be/abc 小白船 | boat". Lines starting with # are skipped.
     """
     _validate_output_options(video, max_height, compatible, quality)
     if yoto_title is not None and video:
         raise typer.BadParameter("--yoto uploads MP3s and can't be used with --video.")
+    if yoto_title is None and (icon is not None or cover is not None):
+        raise typer.BadParameter("--icon and --cover only apply with --yoto.")
 
     if not file.exists():
         typer.echo(f"Error: File not found: {file}", err=True)
@@ -206,12 +235,12 @@ def batch(
 
     typer.echo(f"Downloading {len(entries)} URL(s)...")
     failed = []
-    to_upload: list[tuple[Path, str]] = []
-    for i, (url, name) in enumerate(entries, 1):
-        typer.echo(f"\n[{i}/{len(entries)}] {url}")
+    to_upload: list[_YotoItem] = []
+    for i, entry in enumerate(entries, 1):
+        typer.echo(f"\n[{i}/{len(entries)}] {entry.url}")
         try:
             paths = download(
-                url,
+                entry.url,
                 config,
                 output_dir=out,
                 video=video,
@@ -220,11 +249,13 @@ def batch(
             )
         except DownloadError as e:
             typer.echo(f"  Failed: {e}", err=True)
-            failed.append(url)
+            failed.append(entry.url)
             continue
         # A name only fits a single song; a playlist URL keeps its file names.
+        # An icon suits every song from the line, so it applies to all of them.
         for path in map(Path, paths):
-            to_upload.append((path, name if name and len(paths) == 1 else path.stem))
+            name = entry.name if entry.name and len(paths) == 1 else path.stem
+            to_upload.append(_YotoItem(path, name, entry.icon))
 
     if failed:
         typer.echo(f"\n{len(failed)} download(s) failed:")
@@ -237,7 +268,7 @@ def batch(
     typer.echo("\nAll downloads complete!")
     if yoto_title is not None:
         typer.echo("\nUploading to Yoto...")
-        _send_to_yoto(yoto_title, to_upload)
+        _send_to_yoto(yoto_title, to_upload, default_icon=icon, cover=cover)
 
 
 def _yoto_client_id() -> str:
@@ -272,6 +303,8 @@ def upload(
         typer.Argument(help="Audio files, in playlist order", exists=True, dir_okay=False),
     ],
     title: Annotated[str, typer.Option("--title", "-t", help="Playlist title")],
+    icon: IconOption = None,
+    cover: CoverOption = None,
     verbose: VerboseOption = False,
 ) -> None:
     """Upload audio files to Yoto as a new Make Your Own playlist.
@@ -279,22 +312,89 @@ def upload(
     Track names are the file names without the extension.
     """
     _setup_logging(verbose)
-    _send_to_yoto(title, [(path, path.stem) for path in files])
+    _send_to_yoto(
+        title,
+        [_YotoItem(path, path.stem) for path in files],
+        default_icon=icon,
+        cover=cover,
+    )
 
 
-def _send_to_yoto(title: str, items: list[tuple[Path, str]]) -> None:
-    """Upload (file, track name) pairs in order, then create one playlist."""
+@yoto_app.command()
+def icons(
+    query: Annotated[
+        str | None, typer.Argument(help="Word to search for, e.g. boat or moon")
+    ] = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Search Yoto's built-in icons. Use an icon's name with --icon or after | in a batch file."""
+    _setup_logging(verbose)
     client_id = _yoto_client_id()
     try:
+        found = yoto.public_icons(yoto.access_token(client_id))
+    except yoto.YotoError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    if query:
+        found = yoto.search_icons(found, query)
+    if not found:
+        typer.echo(f"No icons match '{query}'.")
+        raise typer.Exit(code=1)
+    for item in found:
+        tags = ", ".join(item.get("publicTags") or [])
+        typer.echo(f"{item.get('title', '?'):<28} {tags}")
+    typer.echo(f"\n{len(found)} icon(s). Preview them at https://yoto.dev/icons/using-icons")
+
+
+@dataclass
+class _YotoItem:
+    path: Path
+    name: str
+    icon: str | None = None
+
+
+def _send_to_yoto(
+    title: str,
+    items: list[_YotoItem],
+    *,
+    default_icon: str | None = None,
+    cover: str | None = None,
+) -> None:
+    """Upload files in order, then create one playlist.
+
+    Icons and the cover are resolved first, so a mistyped icon name fails
+    before any audio is uploaded.
+    """
+    client_id = _yoto_client_id()
+    try:
+        token = yoto.access_token(client_id)
+        specs = {spec for spec in (default_icon, *(i.icon for i in items)) if spec}
+        resolved: dict[str, str] = {}
+        if specs:
+            typer.echo("Finding icons...")
+            # Fetch the built-in list only if a spec isn't a file or reference.
+            builtin = None
+            for spec in sorted(specs):
+                if not spec.startswith("yoto:#") and not Path(spec).expanduser().is_file():
+                    builtin = builtin if builtin is not None else yoto.public_icons(token)
+                resolved[spec] = yoto.resolve_icon(spec, token, builtin)
+        cover_url = None
+        if cover:
+            typer.echo("Uploading cover image...")
+            cover_url = yoto.upload_cover(cover, token)
+
         tracks = []
-        for i, (path, name) in enumerate(items, 1):
-            typer.echo(f"[{i}/{len(items)}] Uploading {name}...")
+        for i, item in enumerate(items, 1):
+            typer.echo(f"[{i}/{len(items)}] Uploading {item.name}...")
             # Fetched per file: a long upload can outlast one access token.
-            tracks.append(
-                yoto.upload_track(path, yoto.access_token(client_id), title=name)
-            )
+            track = yoto.upload_track(item.path, yoto.access_token(client_id), title=item.name)
+            spec = item.icon or default_icon
+            track.icon = resolved[spec] if spec else None
+            tracks.append(track)
         typer.echo(f"Creating playlist '{title}'...")
-        new_id = yoto.create_playlist(title, tracks, yoto.access_token(client_id))
+        new_id = yoto.create_playlist(
+            title, tracks, yoto.access_token(client_id), cover_url=cover_url
+        )
     except yoto.YotoError as e:
         typer.echo(f"Error: {e}", err=True)
         typer.echo("No playlist was created.", err=True)

@@ -236,6 +236,8 @@ class Track:
     file_size: int
     channels: str | int | None
     format: str | None
+    # A `yoto:#<mediaId>` icon reference, shown on the player for this track.
+    icon: str | None = None
 
 
 def _auth_headers(token: str) -> dict:
@@ -290,7 +292,7 @@ def upload_track(
         sleep(interval)
 
 
-def build_content(title: str, tracks: list[Track]) -> dict:
+def build_content(title: str, tracks: list[Track], cover_url: str | None = None) -> dict:
     """The POST /content body for a playlist with one chapter per track."""
     chapters = []
     for i, t in enumerate(tracks, 1):
@@ -308,9 +310,10 @@ def build_content(title: str, tracks: list[Track]) -> dict:
             track["channels"] = t.channels
         if t.format:
             track["format"] = t.format
-        chapters.append(
-            {"key": key, "title": t.title, "overlayLabel": str(i), "tracks": [track]}
-        )
+        chapter = {"key": key, "title": t.title, "overlayLabel": str(i), "tracks": [track]}
+        if t.icon:
+            track["display"] = chapter["display"] = {"icon16x16": t.icon}
+        chapters.append(chapter)
 
     total_size = sum(t.file_size for t in tracks)
     body = {
@@ -324,10 +327,14 @@ def build_content(title: str, tracks: list[Track]) -> dict:
             }
         },
     }
+    if cover_url:
+        body["metadata"]["cover"] = {"imageL": cover_url}
     return body
 
 
-def create_playlist(title: str, tracks: list[Track], token: str) -> str:
+def create_playlist(
+    title: str, tracks: list[Track], token: str, cover_url: str | None = None
+) -> str:
     """Create a new playlist and return its card ID.
 
     Always creates; never updates. Sending a cardId would replace that
@@ -337,9 +344,133 @@ def create_playlist(title: str, tracks: list[Track], token: str) -> str:
         "POST",
         f"{API_BASE}/content",
         headers={**_auth_headers(token), "Content-Type": "application/json"},
-        data=json.dumps(build_content(title, tracks)).encode(),
+        data=json.dumps(build_content(title, tracks, cover_url)).encode(),
     )
     new_id = ((resp or {}).get("card") or {}).get("cardId")
     if not new_id:
         raise YotoError(f"Yoto didn't return a card ID: {resp}")
     return new_id
+
+
+# --- Icons and cover images --------------------------------------------------
+
+
+def public_icons(token: str) -> list[dict]:
+    """Yoto's built-in 16x16 icons: dicts with mediaId, title, publicTags."""
+    resp = _request(
+        "GET", f"{API_BASE}/media/displayIcons/user/yoto", headers=_auth_headers(token)
+    )
+    return (resp or {}).get("displayIcons") or []
+
+
+def search_icons(icons: list[dict], query: str) -> list[dict]:
+    """Icons matching `query`, best first: exact title, then tag, then part of a title."""
+    q = query.strip().lower()
+
+    def rank(icon: dict) -> int | None:
+        title = (icon.get("title") or "").lower()
+        tags = [t.lower() for t in icon.get("publicTags") or []]
+        if title == q:
+            return 0
+        if q in tags:
+            return 1
+        if q in title:
+            return 2
+        return None
+
+    ranked = [(r, i) for i, icon in enumerate(icons) if (r := rank(icon)) is not None]
+    return [icons[i] for _, i in sorted(ranked)]
+
+
+# Leading bytes of each image format Yoto accepts.
+_IMAGE_SIGNATURES = {
+    b"\x89PNG\r\n\x1a\n": "image/png",
+    b"\xff\xd8\xff": "image/jpeg",
+    b"GIF87a": "image/gif",
+    b"GIF89a": "image/gif",
+}
+
+
+def _image_type(data: bytes, label: str) -> str:
+    """Content type from the file's leading bytes, not its name.
+
+    Names lie: an MP3's embedded "cover.jpg" is often really a PNG.
+    """
+    for signature, content_type in _IMAGE_SIGNATURES.items():
+        if data.startswith(signature):
+            return content_type
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    raise YotoError(f"{label} doesn't look like an image (use PNG, GIF or JPEG)")
+
+
+def upload_icon(path: Path, token: str) -> str:
+    """Upload an image as a custom icon; Yoto shrinks it to 16x16. Returns its reference."""
+    data = path.read_bytes()
+    # Raw image bytes, not multipart: Yoto's docs show a form upload, but the
+    # endpoint rejects that with "A binary image file is required".
+    query = urllib.parse.urlencode({"autoConvert": "true", "filename": path.stem})
+    resp = _request(
+        "POST",
+        f"{API_BASE}/media/displayIcons/user/me/upload?{query}",
+        headers={**_auth_headers(token), "Content-Type": _image_type(data, path.name)},
+        data=data,
+    )
+    media_id = ((resp or {}).get("displayIcon") or {}).get("mediaId")
+    if not media_id:
+        raise YotoError(f"Yoto didn't accept {path.name} as an icon: {resp}")
+    return f"yoto:#{media_id}"
+
+
+def resolve_icon(spec: str, token: str, icons: list[dict] | None = None) -> str:
+    """Turn an icon spec into a `yoto:#<id>` reference.
+
+    The spec is a `yoto:#<id>` reference, a path to an image file (uploaded as
+    a custom icon), or a word to search Yoto's built-in icons for.
+    `icons` is the built-in list, passed in so it's fetched once per run.
+    """
+    spec = spec.strip()
+    if spec.startswith("yoto:#"):
+        return spec
+    path = Path(spec).expanduser()
+    if path.is_file():
+        return upload_icon(path, token)
+    matches = search_icons(icons if icons is not None else public_icons(token), spec)
+    if not matches:
+        raise YotoError(
+            f"No Yoto icon matches '{spec}', and no such image file exists. "
+            "Find one with: yotutil yoto icons <word>"
+        )
+    return f"yoto:#{matches[0]['mediaId']}"
+
+
+def _read_image(source: str) -> tuple[bytes, str]:
+    """(bytes, content type) of a local image file or an http(s) image URL."""
+    if source.startswith(("http://", "https://")):
+        try:
+            with urllib.request.urlopen(source, timeout=60) as resp:
+                data = resp.read()
+        except urllib.error.URLError as e:
+            raise YotoError(f"Could not download cover image {source}: {e}")
+    else:
+        path = Path(source).expanduser()
+        if not path.is_file():
+            raise YotoError(f"Cover image not found: {source}")
+        data = path.read_bytes()
+    return data, _image_type(data, source)
+
+
+def upload_cover(source: str, token: str) -> str:
+    """Upload a cover image (file or URL); Yoto resizes it. Returns its URL."""
+    data, content_type = _read_image(source)
+    query = urllib.parse.urlencode({"autoconvert": "true", "coverType": "default"})
+    resp = _request(
+        "POST",
+        f"{API_BASE}/media/coverImage/user/me/upload?{query}",
+        headers={**_auth_headers(token), "Content-Type": content_type},
+        data=data,
+    )
+    url = ((resp or {}).get("coverImage") or {}).get("mediaUrl")
+    if not url:
+        raise YotoError(f"Yoto didn't accept the cover image: {resp}")
+    return url
