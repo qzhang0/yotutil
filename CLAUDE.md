@@ -19,7 +19,7 @@ runtime, and 18 tests fail without one on PATH.
 - `src/yotutil/cli.py` — Typer CLI entry point (`dl`, `batch [--yoto]`, `yoto login`, `yoto upload`)
 - `src/yotutil/downloader.py` — yt-dlp Python API wrapper (format selection, download, convert/mux, progress and stage reporting)
 - `src/yotutil/config.py` — TOML config loading from `~/.config/yotutil/config.toml`
-- `src/yotutil/yoto.py` — Yoto API client (stdlib only): PKCE login, upload + transcode poll, playlist create. All HTTP goes through `_request`, which tests replace
+- `src/yotutil/yoto.py` — Yoto API client (stdlib only): PKCE login, upload + transcode poll, icons (built-in search, custom upload), cover upload, playlist create. All HTTP goes through `_request`, which tests replace
 
 ## Key dependencies
 
@@ -38,7 +38,9 @@ runtime, and 18 tests fail without one on PATH.
 - `download()` returns final file paths via a `MoveFiles` postprocessor hook. The hook payload key is `info_dict`, not `info`; with the wrong key it silently returns `[]`
 - Yoto: a public client with PKCE over loopback `http://127.0.0.1:8787/callback`; this must match the redirect URL registered at dashboard.yoto.dev. Refresh tokens are single-use, so always save the new one. Tokens are in `~/.config/yotutil/yoto_token.json` (0600)
 - Yoto: `POST /content` with a `cardId` updates that playlist with the body you send; per Yoto's docs it is a full replace, not an append (not verified live). yotutil only ever creates new playlists; adding to an existing one needs a read of its current chapters first, which needs `user:content:view` (not granted by `user:content:manage` in practice — reading a card 403s)
-- Yoto: no `display.icon16x16` needed; a playlist without icons was accepted live
+- Yoto: `display.icon16x16` is optional; a playlist without icons was accepted live. When set, it goes on both chapter and track as `yoto:#<mediaId>`
+- Yoto icon upload (`/media/displayIcons/user/me/upload`) takes **raw image bytes** with an image Content-Type. The multipart form in Yoto's docs is rejected with "A binary image file is required". Cover upload is raw bytes too
+- Image Content-Type comes from leading bytes (`_image_type`), not the extension. yt-dlp's embedded "cover.jpg" art is often PNG
 - Audio quality uses yt-dlp scale: `0` = best, `9` = worst
 
 ## Notes

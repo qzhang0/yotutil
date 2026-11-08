@@ -273,13 +273,40 @@ yotutil batch songs.txt -o ~/Music/yoto --yoto "My playlist"
 
 Songs are uploaded in the order they appear in the file. If any download fails, nothing is uploaded, so you can fix the list and run it again without getting a half-finished playlist.
 
+### Icons and a cover picture
+
+The Yoto player shows a small 16×16 picture for each song. To choose one, add `|` and the icon after the song name:
+
+```
+https://youtu.be/q74hjIloPbE 小白船 | boat
+https://youtu.be/0_QFUej1WJw 月亮船 | moon
+https://youtu.be/r9VZyJTmjUk 让我们荡起双桨 | ~/Pictures/icons/oar.png
+```
+
+- **A word** (`boat`, `moon`, `flower`) picks one of Yoto's built-in icons. To see what's available, search them:
+
+  ```bash
+  yotutil yoto icons moon
+  ```
+
+  Pictures of all the built-in icons are on [Yoto's icon page](https://yoto.dev/icons/using-icons).
+- **A path to a picture** uploads your own icon. Yoto shrinks it to 16×16, so small pixel-art pictures look best. Photos turn into a blur.
+
+`--icon` sets an icon for every song that doesn't have its own, and `--cover` adds a cover picture to the whole playlist, from a file or a web address:
+
+```bash
+yotutil batch songs.txt --yoto "My playlist" --icon music --cover ~/Pictures/cover.jpg
+```
+
+If an icon name matches nothing, yotutil stops before uploading anything and tells you how to search.
+
 ### Upload MP3s you already have
 
 ```bash
 yotutil yoto upload ~/Music/yoto/*.mp3 --title "My playlist"
 ```
 
-Track names come from the file names, without `.mp3`. To control the order, list the files one by one instead of using `*`.
+Track names come from the file names, without `.mp3`. `--icon` and `--cover` work here too. To control the order, list the files one by one instead of using `*`.
 
 Each run creates a **new** playlist. yotutil never changes or adds to a playlist you already have. When it's done, open the Yoto app and link the new playlist to a card.
 
@@ -349,8 +376,10 @@ Download every address listed in a text file.
 | `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
 | `--compatible` | `-c` | off | Prefer H.264/AAC so the file plays in QuickTime (with `--video`) |
 | `--yoto` | | off | Then upload the MP3s to Yoto as a new playlist with this title (not with `--video`) |
+| `--icon` | | none | Yoto icon for songs without their own: a built-in icon word or a picture file (with `--yoto`) |
+| `--cover` | | none | Yoto playlist cover: a picture file or web address (with `--yoto`) |
 
-Each line is an address, optionally followed by a space and a track name for Yoto.
+Each line is an address, optionally followed by a track name and `| icon` for Yoto.
 
 ### `yotutil yoto login`
 
@@ -358,7 +387,11 @@ Sign in to Yoto in your browser. Needed once per computer.
 
 ### `yotutil yoto upload <files…> --title <title>`
 
-Upload audio files, in the order given, as a new Yoto playlist. Track names are the file names without the extension.
+Upload audio files, in the order given, as a new Yoto playlist. Track names are the file names without the extension. Takes `--icon` and `--cover`, as `batch` does.
+
+### `yotutil yoto icons [word]`
+
+Search Yoto's built-in icons by name or tag.
 
 ---
 
