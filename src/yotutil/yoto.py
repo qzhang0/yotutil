@@ -8,6 +8,7 @@ import base64
 import hashlib
 import json
 import logging
+import mimetypes
 import os
 import secrets
 import time
@@ -15,7 +16,9 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import webbrowser
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from pathlib import Path
 
 from yotutil.config import CONFIG_DIR
 
@@ -218,3 +221,124 @@ def access_token(client_id: str, now=time.time) -> str:
     # Refresh tokens are single-use: the new one must replace the old.
     _save_tokens(tokens, previous=stored)
     return tokens["access_token"]
+
+
+# --- Uploading ---------------------------------------------------------------
+
+
+@dataclass
+class Track:
+    """An audio file Yoto has transcoded and can play."""
+
+    title: str
+    sha256: str
+    duration: float
+    file_size: int
+    channels: str | int | None
+    format: str | None
+
+
+def _auth_headers(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+
+def upload_track(
+    path: Path,
+    token: str,
+    *,
+    timeout: float = 120,
+    interval: float = 1,
+    sleep=time.sleep,
+    now=time.monotonic,
+) -> Track:
+    """Upload one audio file and wait for Yoto to transcode it.
+
+    The track title is the file name without its extension, so long YouTube
+    titles saved inside the MP3 don't reach the Yoto app.
+    """
+    resp = _request("GET", f"{API_BASE}/media/transcode/audio/uploadUrl", headers=_auth_headers(token))
+    upload = (resp or {}).get("upload") or {}
+    upload_url, upload_id = upload.get("uploadUrl"), upload.get("uploadId")
+    if not upload_id:
+        raise YotoError(f"Yoto gave no upload ID for {path.name}")
+    # Yoto may already hold this exact file; then there is no URL to upload to.
+    if upload_url:
+        _request(
+            "PUT",
+            upload_url,
+            headers={"Content-Type": mimetypes.guess_type(path.name)[0] or "audio/mpeg"},
+            data=path.read_bytes(),
+        )
+
+    poll_url = f"{API_BASE}/media/upload/{upload_id}/transcoded?loudnorm=false"
+    deadline = now() + timeout
+    while True:
+        transcode = (_request("GET", poll_url, headers=_auth_headers(token)) or {}).get("transcode") or {}
+        if transcode.get("transcodedSha256"):
+            info = transcode.get("transcodedInfo") or {}
+            return Track(
+                title=path.stem,
+                sha256=transcode["transcodedSha256"],
+                duration=info.get("duration") or 0,
+                file_size=info.get("fileSize") or 0,
+                channels=info.get("channels"),
+                format=info.get("format"),
+            )
+        if now() >= deadline:
+            raise YotoError(f"Yoto didn't finish processing {path.name} within {timeout:.0f}s")
+        sleep(interval)
+
+
+def build_content(title: str, tracks: list[Track], card_id: str | None = None) -> dict:
+    """The POST /content body for a playlist with one chapter per track."""
+    chapters = []
+    for i, t in enumerate(tracks, 1):
+        key = f"{i:02d}"
+        track = {
+            "key": "01",
+            "title": t.title,
+            "trackUrl": f"yoto:#{t.sha256}",
+            "duration": t.duration,
+            "fileSize": t.file_size,
+            "type": "audio",
+            "overlayLabel": str(i),
+        }
+        if t.channels is not None:
+            track["channels"] = t.channels
+        if t.format:
+            track["format"] = t.format
+        chapters.append(
+            {"key": key, "title": t.title, "overlayLabel": str(i), "tracks": [track]}
+        )
+
+    total_size = sum(t.file_size for t in tracks)
+    body = {
+        "title": title,
+        "content": {"chapters": chapters},
+        "metadata": {
+            "media": {
+                "duration": sum(t.duration for t in tracks),
+                "fileSize": total_size,
+                "readableFileSize": round(total_size / 1024 / 1024, 1),
+            }
+        },
+    }
+    if card_id:
+        body["cardId"] = card_id
+    return body
+
+
+def create_playlist(
+    title: str, tracks: list[Track], token: str, card_id: str | None = None
+) -> str:
+    """Create (or, with card_id, replace) a playlist. Returns its card ID."""
+    resp = _request(
+        "POST",
+        f"{API_BASE}/content",
+        headers={**_auth_headers(token), "Content-Type": "application/json"},
+        data=json.dumps(build_content(title, tracks, card_id)).encode(),
+    )
+    new_id = ((resp or {}).get("card") or {}).get("cardId")
+    if not new_id:
+        raise YotoError(f"Yoto didn't return a card ID: {resp}")
+    return new_id

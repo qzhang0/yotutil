@@ -161,3 +161,58 @@ def test_yoto_login_without_client_id_explains_setup(tmp_path, monkeypatch):
     assert result.exit_code == 1
     assert "dashboard.yoto.dev" in _plain(result)
     assert "yoto_client_id" in _plain(result)
+
+
+def test_yoto_upload_creates_no_playlist_when_a_file_fails(tmp_path, monkeypatch):
+    from yotutil import yoto
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('yoto_client_id = "cid"\n')
+    monkeypatch.setattr("yotutil.config.CONFIG_FILE", cfg)
+    monkeypatch.setattr(yoto, "access_token", lambda cid: "TOK")
+    a, b = tmp_path / "a.mp3", tmp_path / "b.mp3"
+    a.write_bytes(b"x")
+    b.write_bytes(b"x")
+
+    def fake_upload(path, token):
+        if path.name == "b.mp3":
+            raise yoto.YotoError("boom")
+        return yoto.Track(path.stem, "s", 1, 1, None, None)
+
+    created = []
+    monkeypatch.setattr(yoto, "upload_track", fake_upload)
+    monkeypatch.setattr(yoto, "create_playlist", lambda *a, **k: created.append(a))
+
+    result = runner.invoke(app, ["yoto", "upload", str(a), str(b), "--title", "t"])
+
+    assert result.exit_code == 1
+    assert created == []
+    assert "No playlist was created" in _plain(result)
+
+
+def test_yoto_upload_keeps_given_file_order(tmp_path, monkeypatch):
+    from yotutil import yoto
+
+    cfg = tmp_path / "config.toml"
+    cfg.write_text('yoto_client_id = "cid"\n')
+    monkeypatch.setattr("yotutil.config.CONFIG_FILE", cfg)
+    monkeypatch.setattr(yoto, "access_token", lambda cid: "TOK")
+    files = [tmp_path / n for n in ("z.mp3", "a.mp3", "m.mp3")]
+    for f in files:
+        f.write_bytes(b"x")
+    monkeypatch.setattr(
+        yoto, "upload_track", lambda p, t: yoto.Track(p.stem, "s", 1, 1, None, None)
+    )
+    created = {}
+
+    def fake_create(title, tracks, token, card_id=None):
+        created.update(title=title, names=[t.title for t in tracks])
+        return "NEW"
+
+    monkeypatch.setattr(yoto, "create_playlist", fake_create)
+
+    result = runner.invoke(app, ["yoto", "upload", *map(str, files), "--title", "t"])
+
+    assert result.exit_code == 0, result.output
+    assert created == {"title": "t", "names": ["z", "a", "m"]}
+    assert "NEW" in _plain(result)

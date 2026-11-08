@@ -233,3 +233,43 @@ def login(verbose: VerboseOption = False) -> None:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(code=1)
     typer.echo("Signed in to Yoto.")
+
+
+@yoto_app.command()
+def upload(
+    files: Annotated[
+        list[Path],
+        typer.Argument(help="Audio files, in playlist order", exists=True, dir_okay=False),
+    ],
+    title: Annotated[str, typer.Option("--title", "-t", help="Playlist title")],
+    card_id: Annotated[
+        str | None,
+        typer.Option("--card-id", help="Replace the tracks of this existing playlist"),
+    ] = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Upload audio files to Yoto as one Make Your Own playlist.
+
+    Track names are the file names without the extension.
+    """
+    _setup_logging(verbose)
+    client_id = _yoto_client_id()
+    try:
+        tracks = []
+        for i, path in enumerate(files, 1):
+            typer.echo(f"[{i}/{len(files)}] Uploading {path.stem}...")
+            # Fetched per file: a long upload can outlast one access token.
+            tracks.append(yoto.upload_track(path, yoto.access_token(client_id)))
+        typer.echo(f"Creating playlist '{title}'...")
+        new_id = yoto.create_playlist(
+            title, tracks, yoto.access_token(client_id), card_id=card_id
+        )
+    except yoto.YotoError as e:
+        typer.echo(f"Error: {e}", err=True)
+        typer.echo("No playlist was created or changed.", err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(
+        f"Done! Playlist '{title}' has {len(tracks)} track(s) (card ID {new_id}). "
+        "Link it to a card in the Yoto app."
+    )

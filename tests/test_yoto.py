@@ -123,3 +123,100 @@ def test_failed_refresh_says_how_to_sign_in(token_file, calls):
     calls.replies = [yoto.YotoError("Yoto returned HTTP 403")]
     with pytest.raises(yoto.YotoError, match="yotutil yoto login"):
         yoto.access_token("cid")
+
+
+# --- Uploading ---------------------------------------------------------------
+
+
+def _done(sha="abc", duration=120, size=1000):
+    return {
+        "transcode": {
+            "transcodedSha256": sha,
+            "transcodedInfo": {
+                "duration": duration,
+                "fileSize": size,
+                "channels": "stereo",
+                "format": "aac",
+            },
+        }
+    }
+
+
+def test_upload_track_puts_file_and_polls_until_transcoded(tmp_path, calls):
+    song = tmp_path / "小红帽.mp3"
+    song.write_bytes(b"mp3-bytes")
+    calls.replies = [
+        {"upload": {"uploadUrl": "https://s3/put", "uploadId": "U1"}},
+        None,  # PUT
+        {"transcode": {}},  # still working
+        _done(),
+    ]
+    slept = []
+
+    track = yoto.upload_track(song, "TOK", sleep=slept.append)
+
+    assert [c["method"] for c in calls] == ["GET", "PUT", "GET", "GET"]
+    put = calls[1]
+    assert put["url"] == "https://s3/put"
+    assert put["data"] == b"mp3-bytes"
+    assert put["headers"]["Content-Type"] == "audio/mpeg"
+    assert "Authorization" not in put["headers"]  # pre-signed URL; don't leak the token
+    assert "/media/upload/U1/transcoded" in calls[2]["url"]
+    assert calls[2]["headers"]["Authorization"] == "Bearer TOK"
+    assert len(slept) == 1
+    assert track == yoto.Track("小红帽", "abc", 120, 1000, "stereo", "aac")
+
+
+def test_upload_track_skips_put_when_yoto_already_has_the_file(tmp_path, calls):
+    song = tmp_path / "a.mp3"
+    song.write_bytes(b"x")
+    calls.replies = [{"upload": {"uploadUrl": None, "uploadId": "U1"}}, _done()]
+    yoto.upload_track(song, "TOK", sleep=lambda s: None)
+    assert [c["method"] for c in calls] == ["GET", "GET"]
+
+
+def test_upload_track_gives_up_after_timeout(tmp_path, calls):
+    song = tmp_path / "a.mp3"
+    song.write_bytes(b"x")
+    calls.replies = [{"upload": {"uploadUrl": "u", "uploadId": "U1"}}, None] + [
+        {"transcode": {}}
+    ] * 10
+    clock = iter(range(0, 1000, 50))
+    with pytest.raises(yoto.YotoError, match="a.mp3"):
+        yoto.upload_track(song, "TOK", timeout=120, sleep=lambda s: None, now=lambda: next(clock))
+
+
+def test_build_content_one_chapter_per_track_in_order():
+    tracks = [
+        yoto.Track("小红帽", "s1", 100, 1_048_576, "stereo", "aac"),
+        yoto.Track("YMCA", "s2", 200.5, 1_048_576, "stereo", "aac"),
+    ]
+    body = yoto.build_content("我的歌", tracks)
+
+    assert body["title"] == "我的歌"
+    assert "cardId" not in body
+    chapters = body["content"]["chapters"]
+    assert [c["title"] for c in chapters] == ["小红帽", "YMCA"]
+    assert [c["key"] for c in chapters] == ["01", "02"]
+    assert chapters[1]["tracks"][0]["trackUrl"] == "yoto:#s2"
+    assert chapters[1]["tracks"][0]["type"] == "audio"
+    assert body["metadata"]["media"] == {
+        "duration": 300.5,
+        "fileSize": 2_097_152,
+        "readableFileSize": 2.0,
+    }
+
+
+def test_build_content_with_card_id_updates_existing_playlist():
+    body = yoto.build_content("t", [yoto.Track("a", "s", 1, 1, None, None)], card_id="C1")
+    assert body["cardId"] == "C1"
+    assert "channels" not in body["content"]["chapters"][0]["tracks"][0]
+
+
+def test_create_playlist_posts_json_and_returns_card_id(calls):
+    calls.replies = [{"card": {"cardId": "NEW"}}]
+    card = yoto.create_playlist("t", [yoto.Track("a", "s", 1, 1, None, None)], "TOK")
+    assert card == "NEW"
+    assert calls[0]["method"] == "POST"
+    assert calls[0]["url"].endswith("/content")
+    assert json.loads(calls[0]["data"])["title"] == "t"
