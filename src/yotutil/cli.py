@@ -7,6 +7,8 @@ from typing import Annotated
 import typer
 
 from yotutil.config import Config, load_config
+from yotutil import yoto
+from yotutil.config import CONFIG_FILE
 from yotutil.downloader import DownloadError, download
 
 app = typer.Typer(
@@ -14,6 +16,11 @@ app = typer.Typer(
     help="Download YouTube music videos as MP3 files.",
     no_args_is_help=True,
 )
+yoto_app = typer.Typer(
+    help="Send MP3s to Yoto as a Make Your Own playlist.",
+    no_args_is_help=True,
+)
+app.add_typer(yoto_app, name="yoto")
 
 # Shared by every command, so the flags and help text are declared once.
 OutputDirOption = Annotated[
@@ -201,3 +208,28 @@ def batch(
         raise typer.Exit(code=1)
 
     typer.echo("\nAll downloads complete!")
+
+
+def _yoto_client_id() -> str:
+    client_id = load_config().yoto_client_id
+    if not client_id:
+        typer.echo(
+            "Error: no Yoto client ID. Create an app at https://dashboard.yoto.dev, "
+            f'then add this line to {CONFIG_FILE}:\n  yoto_client_id = "<your client ID>"',
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    return client_id
+
+
+@yoto_app.command()
+def login(verbose: VerboseOption = False) -> None:
+    """Sign in to Yoto in your browser. Needed once per computer."""
+    _setup_logging(verbose)
+    client_id = _yoto_client_id()
+    try:
+        yoto.login(client_id)
+    except yoto.YotoError as e:
+        typer.echo(f"Error: {e}", err=True)
+        raise typer.Exit(code=1)
+    typer.echo("Signed in to Yoto.")

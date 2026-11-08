@@ -153,3 +153,11 @@ def test_batch_empty_file(tmp_path):
     result = runner.invoke(app, ["batch", str(f)])
     assert result.exit_code == 1
     assert "No URLs" in result.output
+
+
+def test_yoto_login_without_client_id_explains_setup(tmp_path, monkeypatch):
+    monkeypatch.setattr("yotutil.config.CONFIG_FILE", tmp_path / "none.toml")
+    result = runner.invoke(app, ["yoto", "login"])
+    assert result.exit_code == 1
+    assert "dashboard.yoto.dev" in _plain(result)
+    assert "yoto_client_id" in _plain(result)
