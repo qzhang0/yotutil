@@ -234,6 +234,57 @@ If some downloads fail, the rest still finish, and the failed addresses are list
 
 ---
 
+## Sending songs to a Yoto player
+
+yotutil can upload your MP3s to [Yoto](https://yotoplay.com) as a new **Make Your Own** playlist, so you don't have to add them one by one in the Yoto app.
+
+### One-time setup
+
+1. **Create your own Yoto app.** Sign in at [dashboard.yoto.dev](https://dashboard.yoto.dev) with your Yoto account and create an application:
+   - **Name:** anything you'll recognise, e.g. `yotutil`.
+   - **Type:** the *public* client type (no client secret).
+   - **Redirect URL:** `http://127.0.0.1:8787/callback`, exactly as written.
+2. **Tell yotutil your Client ID.** Add this line to `~/.config/yotutil/config.toml` (see the section below on creating that file):
+
+   ```toml
+   yoto_client_id = "your client ID"
+   ```
+
+3. **Sign in:**
+
+   ```bash
+   yotutil yoto login
+   ```
+
+   Your browser opens the Yoto sign-in page. Approve access, and the tab says "Signed in to Yoto." yotutil keeps you signed in after that.
+
+### Download and upload in one step
+
+Add a song name after each address in your text file. That name is what the Yoto app shows for the track. Without one, the track uses the YouTube video title, which is often long.
+
+```
+https://youtu.be/iRZxYG-Ang4 小红帽
+https://youtu.be/r9VZyJTmjUk 让我们荡起双桨
+```
+
+```bash
+yotutil batch songs.txt -o ~/Music/yoto --yoto "My playlist"
+```
+
+Songs are uploaded in the order they appear in the file. If any download fails, nothing is uploaded, so you can fix the list and run it again without getting a half-finished playlist.
+
+### Upload MP3s you already have
+
+```bash
+yotutil yoto upload ~/Music/yoto/*.mp3 --title "My playlist"
+```
+
+Track names come from the file names, without `.mp3`. To control the order, list the files one by one instead of using `*`.
+
+Each run creates a **new** playlist. yotutil never changes or adds to a playlist you already have. When it's done, open the Yoto app and link the new playlist to a card.
+
+---
+
 ## Always saving to the same folder (optional)
 
 If you're tired of typing `-o ~/Music` every time, you can set it once.
@@ -297,6 +348,17 @@ Download every address listed in a text file.
 | `--video` | `-V` | off | Keep the original video (`.mp4`) instead of converting to MP3 |
 | `--max-height` | | none | Cap video height, e.g. `1080` or `720` (with `--video`) |
 | `--compatible` | `-c` | off | Prefer H.264/AAC so the file plays in QuickTime (with `--video`) |
+| `--yoto` | | off | Then upload the MP3s to Yoto as a new playlist with this title (not with `--video`) |
+
+Each line is an address, optionally followed by a space and a track name for Yoto.
+
+### `yotutil yoto login`
+
+Sign in to Yoto in your browser. Needed once per computer.
+
+### `yotutil yoto upload <files…> --title <title>`
+
+Upload audio files, in the order given, as a new Yoto playlist. Track names are the file names without the extension.
 
 ---
 
@@ -359,9 +421,10 @@ To install your local checkout as a global command: `uv tool install .`
 
 ### Architecture
 
-- `src/yotutil/cli.py` — Typer CLI entry point (`dl` and `batch` commands)
+- `src/yotutil/cli.py` — Typer CLI entry point (`dl`, `batch`, and `yoto login` / `yoto upload` commands)
 - `src/yotutil/downloader.py` — yt-dlp Python API wrapper (download, convert, progress)
 - `src/yotutil/config.py` — TOML config loading from `~/.config/yotutil/config.toml`
+- `src/yotutil/yoto.py` — Yoto API client: PKCE sign-in, audio upload and transcode polling, playlist creation (standard library only)
 
 ### Why not just call yt-dlp directly?
 
