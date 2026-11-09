@@ -181,7 +181,9 @@ def test_wait_transcoded_polls_until_done(calls):
     calls.replies = [{"transcode": {}}, _done()]
     slept = []
 
-    track = yoto.wait_transcoded("U1", "TOK", title="小红帽", icon="yoto:#I", sleep=slept.append)
+    track = yoto.wait_transcoded(
+        "U1", lambda: "TOK", title="小红帽", icon="yoto:#I", sleep=slept.append
+    )
 
     assert all("/media/upload/U1/transcoded" in c["url"] for c in calls)
     assert len(slept) == 1
@@ -193,8 +195,23 @@ def test_wait_transcoded_gives_up_after_timeout(calls):
     clock = iter(range(0, 1000, 50))
     with pytest.raises(yoto.YotoError, match="小红帽"):
         yoto.wait_transcoded(
-            "U1", "TOK", title="小红帽", timeout=120, sleep=lambda s: None, now=lambda: next(clock)
+            "U1",
+            lambda: "TOK",
+            title="小红帽",
+            timeout=120,
+            sleep=lambda s: None,
+            now=lambda: next(clock),
         )
+
+
+def test_wait_transcoded_asks_for_a_token_on_every_poll(calls):
+    """A transcode can outlive one access token, so each poll gets a fresh one."""
+    calls.replies = [{"transcode": {}}, _done()]
+    tokens = iter(["T1", "T2"])
+
+    yoto.wait_transcoded("U1", lambda: next(tokens), title="a", sleep=lambda s: None)
+
+    assert [c["headers"]["Authorization"] for c in calls] == ["Bearer T1", "Bearer T2"]
 
 
 def test_build_content_one_chapter_per_track_in_order():
@@ -257,7 +274,8 @@ def fake_api(monkeypatch):
     monkeypatch.setattr(yoto, "upload_cover", lambda source, token: log.append(("cover", source)) or "https://cdn/c")
     monkeypatch.setattr(yoto, "start_upload", lambda path, token: log.append(("send", path.name)) or path.name)
 
-    def wait(uid, token, *, title, icon=None):
+    def wait(uid, get_token, *, title, icon=None):
+        get_token()
         log.append(("wait", uid))
         return _track(title, icon=icon)
 

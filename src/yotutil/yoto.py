@@ -283,7 +283,7 @@ def start_upload(path: Path, token: str) -> str:
 
 def wait_transcoded(
     upload_id: str,
-    token: str,
+    get_token: Callable[[], str],
     *,
     title: str,
     icon: str | None = None,
@@ -291,11 +291,15 @@ def wait_transcoded(
     sleep=time.sleep,
     now=time.monotonic,
 ) -> Track:
-    """Poll until Yoto has transcoded an upload, and return it as a Track."""
+    """Poll until Yoto has transcoded an upload, and return it as a Track.
+
+    `get_token` is called on every poll: processing can outlive one access token.
+    """
     poll_url = f"{API_BASE}/media/upload/{upload_id}/transcoded?loudnorm=false"
     deadline = now() + timeout
     while True:
-        transcode = _request("GET", poll_url, headers=_auth_headers(token)).get("transcode") or {}
+        reply = _request("GET", poll_url, headers=_auth_headers(get_token()))
+        transcode = reply.get("transcode") or {}
         if transcode.get("transcodedSha256"):
             info = transcode.get("transcodedInfo") or {}
             return Track(
@@ -416,7 +420,7 @@ def publish_playlist(
         upload_ids.append(start_upload(item.path, get_token()))
     progress("Waiting for Yoto to process the audio...")
     tracks = [
-        wait_transcoded(uid, get_token(), title=item.name, icon=icons.get(item.icon))
+        wait_transcoded(uid, get_token, title=item.name, icon=icons.get(item.icon))
         for uid, item in zip(upload_ids, items)
     ]
     progress(f"Creating playlist '{title}'...")
