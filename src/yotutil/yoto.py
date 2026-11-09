@@ -12,6 +12,7 @@ import logging
 import mimetypes
 import os
 import secrets
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -108,8 +109,11 @@ def authorize_url(client_id: str, challenge: str, state: str) -> str:
     return f"{AUTH_URL}?{query}"
 
 
-def _wait_for_callback(state: str) -> str:
-    """Serve one request on the loopback redirect URL and return the auth code."""
+def _wait_for_callback(state: str, on_listening: Callable[[], object]) -> str:
+    """Serve one request on the loopback redirect URL and return the auth code.
+
+    `on_listening` runs once the port is open, so the reply can't arrive early.
+    """
     result: dict[str, str] = {}
 
     class Handler(BaseHTTPRequestHandler):
@@ -136,6 +140,7 @@ def _wait_for_callback(state: str) -> str:
         raise YotoError(f"Could not listen on {REDIRECT_URI}: {e}")
     server.timeout = _LOGIN_TIMEOUT
     with server:
+        on_listening()
         server.handle_request()
 
     if "error" in result:
@@ -168,8 +173,9 @@ def login(client_id: str, open_browser=webbrowser.open) -> None:
     state = secrets.token_urlsafe(16)
     url = authorize_url(client_id, challenge, state)
     print(f"Opening your browser to sign in to Yoto. If it doesn't open, visit:\n{url}")
-    open_browser(url)
-    code = _wait_for_callback(state)
+    # Some launchers block until the page loads, which needs the reply served.
+    browser = threading.Thread(target=open_browser, args=(url,), daemon=True)
+    code = _wait_for_callback(state, browser.start)
     tokens = _token_request(
         {
             "grant_type": "authorization_code",

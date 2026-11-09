@@ -3,8 +3,11 @@
 import base64
 import hashlib
 import json
+import socket
 import stat
+import threading
 import urllib.parse
+import urllib.request
 
 import pytest
 
@@ -71,7 +74,9 @@ def test_authorize_url_carries_pkce_scopes_and_redirect():
 
 
 def test_login_exchanges_code_and_saves_tokens(token_file, calls, monkeypatch):
-    monkeypatch.setattr(yoto, "_wait_for_callback", lambda state: "the-code")
+    monkeypatch.setattr(
+        yoto, "_wait_for_callback", lambda state, on_listening: on_listening() or "the-code"
+    )
     calls.replies = [{"access_token": "A", "refresh_token": "R"}]
 
     yoto.login("cid", open_browser=lambda url: None)
@@ -85,6 +90,31 @@ def test_login_exchanges_code_and_saves_tokens(token_file, calls, monkeypatch):
         "access_token": "A",
         "refresh_token": "R",
     }
+
+
+def test_login_listens_before_opening_a_blocking_browser(token_file, calls, monkeypatch):
+    """The redirect can arrive while the browser launcher is still running."""
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    monkeypatch.setattr(yoto, "REDIRECT_PORT", port)
+    monkeypatch.setattr(yoto, "REDIRECT_URI", f"http://127.0.0.1:{port}/callback")
+    calls.replies = [{"access_token": "A", "refresh_token": "R"}]
+
+    def browser(url):
+        # Redirects at once, and doesn't return until the page has loaded.
+        state = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))["state"]
+        reply = f"http://127.0.0.1:{port}/callback?code=C&state={state}"
+        urllib.request.urlopen(reply, timeout=5).read()
+
+    run = threading.Thread(
+        target=yoto.login, args=("cid",), kwargs={"open_browser": browser}, daemon=True
+    )
+    run.start()
+    run.join(5)
+
+    assert not run.is_alive()
+    assert dict(urllib.parse.parse_qsl(calls[0]["data"].decode()))["code"] == "C"
 
 
 def test_token_file_is_private(token_file):
