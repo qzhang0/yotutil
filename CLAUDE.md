@@ -19,7 +19,7 @@ runtime, and 18 tests fail without one on PATH.
 - `src/yotutil/cli.py` — Typer CLI entry point (`dl`, `batch [--yoto]`, `yoto login`, `yoto upload`, `yoto icons`)
 - `src/yotutil/downloader.py` — yt-dlp Python API wrapper (format selection, download, convert/mux, progress and stage reporting)
 - `src/yotutil/config.py` — TOML config loading from `~/.config/yotutil/config.toml`
-- `src/yotutil/yoto.py` — Yoto API client (stdlib only): PKCE login, upload + transcode poll, icons (built-in search, custom upload), cover upload, playlist create. All HTTP goes through `_request`, which tests replace
+- `src/yotutil/yoto.py` — Yoto API client (stdlib only): PKCE login, icons (built-in search, custom upload), cover upload, and `publish_playlist`, which runs the whole upload and reports progress through a callback. HTTP goes through `_send` (raw bytes) and API calls through `_request` (JSON, always a dict); tests replace those
 
 ## Key dependencies
 
@@ -35,7 +35,7 @@ runtime, and 18 tests fail without one on PATH.
 - Postprocessor hook names are `Merger`, `ExtractAudio`, `Metadata`, `EmbedThumbnail`, `MoveFiles`; several fire twice, so `_PostprocessorReporter` dedupes consecutive repeats
 - CLI options that a config.toml key can also set MUST default to `None`, never to the real default — `_prepare` only overrides when the value is not `None`. A concrete default silently clobbers the config file on every run (this is exactly what made `audio_quality` inert)
 - Rich colours CLI help/error output when it thinks the destination supports it — true on CI, false in a local pipe — and splits strings like `--video` across escape sequences. Tests asserting on option names must strip escapes first (`_plain` in `tests/test_cli.py`); reproduce locally with `FORCE_COLOR=1`
-- `download()` returns final file paths via a `MoveFiles` postprocessor hook. The hook payload key is `info_dict`, not `info`; with the wrong key it silently returns `[]`
+- `download()` returns final file paths through yt-dlp's `post_hooks` option, which runs once per file after every postprocessor. Don't read paths from `postprocessor_hooks`: those fire twice and carry the path under `info_dict`
 - Yoto: a public client with PKCE over loopback `http://127.0.0.1:8787/callback`; this must match the redirect URL registered at dashboard.yoto.dev. Refresh tokens are single-use, so always save the new one. Tokens are in `~/.config/yotutil/yoto_token.json` (0600)
 - Yoto: `POST /content` with a `cardId` updates that playlist with the body you send; per Yoto's docs it is a full replace, not an append (not verified live). yotutil only ever creates new playlists; adding to an existing one needs a read of its current chapters first, which needs `user:content:view` (not granted by `user:content:manage` in practice — reading a card 403s)
 - Yoto: `display.icon16x16` is optional; a playlist without icons was accepted live. When set, it goes on both chapter and track as `yoto:#<mediaId>`

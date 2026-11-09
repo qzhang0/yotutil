@@ -1,15 +1,16 @@
 """CLI entry point using Typer."""
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated
 
 import typer
 
-from yotutil.config import Config, load_config
 from yotutil import yoto
-from yotutil.config import CONFIG_FILE
+from yotutil.config import CONFIG_FILE, Config, load_config
 from yotutil.downloader import DownloadError, download
 
 app = typer.Typer(
@@ -67,6 +68,18 @@ CompatibleOption = Annotated[
         help="Prefer H.264/AAC so the video plays in QuickTime (with --video)",
     ),
 ]
+
+
+@contextmanager
+def _exit_on(*errors: type[Exception], note: str | None = None) -> Iterator[None]:
+    """Turn the given errors into a one-line message and exit code 1."""
+    try:
+        yield
+    except errors as e:
+        typer.echo(f"Error: {e}", err=True)
+        if note:
+            typer.echo(note, err=True)
+        raise typer.Exit(code=1)
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -139,7 +152,7 @@ def dl(
     config, out = _prepare(output_dir, quality, verbose)
 
     typer.echo(f"Downloading: {url}")
-    try:
+    with _exit_on(DownloadError):
         download(
             url,
             config,
@@ -148,10 +161,7 @@ def dl(
             max_height=max_height,
             compatible=compatible,
         )
-        typer.echo("Done!")
-    except DownloadError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
+    typer.echo("Done!")
 
 
 @dataclass
@@ -168,10 +178,9 @@ def _parse_batch_file(text: str) -> list[_BatchLine]:
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        line, bar, icon = line.partition("|")
+        line, _, icon = line.partition("|")
         url, *rest = line.split(maxsplit=1)
-        name = rest[0].strip() if rest else ""
-        entries.append(_BatchLine(url, name or None, icon.strip() or None if bar else None))
+        entries.append(_BatchLine(url, rest[0].strip() if rest else None, icon.strip() or None))
     return entries
 
 
@@ -232,10 +241,16 @@ def batch(
         raise typer.Exit(code=1)
 
     config, out = _prepare(output_dir, quality, verbose)
+    client_id = None
+    if yoto_title is not None:
+        # Check Yoto set-up now, not after a long run of downloads.
+        client_id = _yoto_client_id(config)
+        with _exit_on(yoto.YotoError):
+            yoto.access_token(client_id)
 
     typer.echo(f"Downloading {len(entries)} URL(s)...")
     failed = []
-    to_upload: list[_YotoItem] = []
+    to_upload: list[yoto.Item] = []
     for i, entry in enumerate(entries, 1):
         typer.echo(f"\n[{i}/{len(entries)}] {entry.url}")
         try:
@@ -253,9 +268,8 @@ def batch(
             continue
         # A name only fits a single song; a playlist URL keeps its file names.
         # An icon suits every song from the line, so it applies to all of them.
-        for path in map(Path, paths):
-            name = entry.name if entry.name and len(paths) == 1 else path.stem
-            to_upload.append(_YotoItem(path, name, entry.icon))
+        name = entry.name if len(paths) == 1 else None
+        to_upload += [yoto.Item(path, name, entry.icon or icon) for path in paths]
 
     if failed:
         typer.echo(f"\n{len(failed)} download(s) failed:")
@@ -268,11 +282,11 @@ def batch(
     typer.echo("\nAll downloads complete!")
     if yoto_title is not None:
         typer.echo("\nUploading to Yoto...")
-        _send_to_yoto(yoto_title, to_upload, default_icon=icon, cover=cover)
+        _send_to_yoto(client_id, yoto_title, to_upload, cover)
 
 
-def _yoto_client_id() -> str:
-    client_id = load_config().yoto_client_id
+def _yoto_client_id(config: Config | None = None) -> str:
+    client_id = (config or load_config()).yoto_client_id
     if not client_id:
         typer.echo(
             "Error: no Yoto client ID. Create an app at https://dashboard.yoto.dev, "
@@ -288,11 +302,8 @@ def login(verbose: VerboseOption = False) -> None:
     """Sign in to Yoto in your browser. Needed once per computer."""
     _setup_logging(verbose)
     client_id = _yoto_client_id()
-    try:
+    with _exit_on(yoto.YotoError):
         yoto.login(client_id)
-    except yoto.YotoError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
     typer.echo("Signed in to Yoto.")
 
 
@@ -312,12 +323,8 @@ def upload(
     Track names are the file names without the extension.
     """
     _setup_logging(verbose)
-    _send_to_yoto(
-        title,
-        [_YotoItem(path, path.stem) for path in files],
-        default_icon=icon,
-        cover=cover,
-    )
+    items = [yoto.Item(path, icon=icon) for path in files]
+    _send_to_yoto(_yoto_client_id(), title, items, cover)
 
 
 @yoto_app.command()
@@ -330,11 +337,8 @@ def icons(
     """Search Yoto's built-in icons. Use an icon's name with --icon or after | in a batch file."""
     _setup_logging(verbose)
     client_id = _yoto_client_id()
-    try:
+    with _exit_on(yoto.YotoError):
         found = yoto.public_icons(yoto.access_token(client_id))
-    except yoto.YotoError as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
     if query:
         found = yoto.search_icons(found, query)
     if not found:
@@ -346,61 +350,18 @@ def icons(
     typer.echo(f"\n{len(found)} icon(s). Preview them at https://yoto.dev/icons/using-icons")
 
 
-@dataclass
-class _YotoItem:
-    path: Path
-    name: str
-    icon: str | None = None
-
-
 def _send_to_yoto(
-    title: str,
-    items: list[_YotoItem],
-    *,
-    default_icon: str | None = None,
-    cover: str | None = None,
+    client_id: str, title: str, items: list[yoto.Item], cover: str | None
 ) -> None:
-    """Upload files in order, then create one playlist.
-
-    Icons and the cover are resolved first, so a mistyped icon name fails
-    before any audio is uploaded.
-    """
-    client_id = _yoto_client_id()
-    try:
-        token = yoto.access_token(client_id)
-        specs = {spec for spec in (default_icon, *(i.icon for i in items)) if spec}
-        resolved: dict[str, str] = {}
-        if specs:
-            typer.echo("Finding icons...")
-            # Fetch the built-in list only if a spec isn't a file or reference.
-            builtin = None
-            for spec in sorted(specs):
-                if not spec.startswith("yoto:#") and not Path(spec).expanduser().is_file():
-                    builtin = builtin if builtin is not None else yoto.public_icons(token)
-                resolved[spec] = yoto.resolve_icon(spec, token, builtin)
-        cover_url = None
-        if cover:
-            typer.echo("Uploading cover image...")
-            cover_url = yoto.upload_cover(cover, token)
-
-        tracks = []
-        for i, item in enumerate(items, 1):
-            typer.echo(f"[{i}/{len(items)}] Uploading {item.name}...")
-            # Fetched per file: a long upload can outlast one access token.
-            track = yoto.upload_track(item.path, yoto.access_token(client_id), title=item.name)
-            spec = item.icon or default_icon
-            track.icon = resolved[spec] if spec else None
-            tracks.append(track)
-        typer.echo(f"Creating playlist '{title}'...")
-        new_id = yoto.create_playlist(
-            title, tracks, yoto.access_token(client_id), cover_url=cover_url
+    with _exit_on(yoto.YotoError, note="No playlist was created."):
+        card_id = yoto.publish_playlist(
+            title,
+            items,
+            lambda: yoto.access_token(client_id),
+            cover=cover,
+            progress=typer.echo,
         )
-    except yoto.YotoError as e:
-        typer.echo(f"Error: {e}", err=True)
-        typer.echo("No playlist was created.", err=True)
-        raise typer.Exit(code=1)
-
     typer.echo(
-        f"Done! New Yoto playlist '{title}' has {len(tracks)} track(s) "
-        f"(card ID {new_id}). Link it to a card in the Yoto app."
+        f"Done! New Yoto playlist '{title}' has {len(items)} track(s) "
+        f"(card ID {card_id}). Link it to a card in the Yoto app."
     )

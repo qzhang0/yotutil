@@ -34,7 +34,7 @@ def calls(monkeypatch):
 
     def fake(method, url, *, headers=None, data=None):
         rec.append({"method": method, "url": url, "headers": headers, "data": data})
-        reply = rec.replies.pop(0) if rec.replies else None
+        reply = rec.replies.pop(0) if rec.replies else {}
         if isinstance(reply, Exception):
             raise reply
         return reply
@@ -127,6 +127,14 @@ def test_failed_refresh_says_how_to_sign_in(token_file, calls):
 
 # --- Uploading ---------------------------------------------------------------
 
+PNG = b"\x89PNG\r\n\x1a\n" + b"rest"
+JPEG = b"\xff\xd8\xff\xe0" + b"rest"
+
+
+def _track(title="a", sha="s", icon=None, **kw) -> yoto.Track:
+    fields = {"duration": 1, "file_size": 1, "channels": None, "format": None} | kw
+    return yoto.Track(title, sha, icon=icon, **fields)
+
 
 def _done(sha="abc", duration=120, size=1000):
     return {
@@ -142,62 +150,66 @@ def _done(sha="abc", duration=120, size=1000):
     }
 
 
-def test_upload_track_puts_file_and_polls_until_transcoded(tmp_path, calls):
-    song = tmp_path / "小红帽.mp3"
-    song.write_bytes(b"mp3-bytes")
-    calls.replies = [
-        {"upload": {"uploadUrl": "https://s3/put", "uploadId": "U1"}},
-        None,  # PUT
-        {"transcode": {}},  # still working
-        _done(),
-    ]
-    slept = []
+@pytest.fixture
+def song(tmp_path):
+    path = tmp_path / "小红帽.mp3"
+    path.write_bytes(b"mp3-bytes")
+    return path
 
-    track = yoto.upload_track(song, "TOK", sleep=slept.append)
 
-    assert [c["method"] for c in calls] == ["GET", "PUT", "GET", "GET"]
-    put = calls[1]
+def test_start_upload_puts_file_to_presigned_url(song, calls):
+    calls.replies = [{"upload": {"uploadUrl": "https://s3/put", "uploadId": "U1"}}]
+
+    assert yoto.start_upload(song, "TOK") == "U1"
+
+    get, put = calls
+    assert get["headers"]["Authorization"] == "Bearer TOK"
+    assert put["method"] == "PUT"
     assert put["url"] == "https://s3/put"
     assert put["data"] == b"mp3-bytes"
     assert put["headers"]["Content-Type"] == "audio/mpeg"
     assert "Authorization" not in put["headers"]  # pre-signed URL; don't leak the token
-    assert "/media/upload/U1/transcoded" in calls[2]["url"]
-    assert calls[2]["headers"]["Authorization"] == "Bearer TOK"
+
+
+def test_start_upload_skips_put_when_yoto_already_has_the_file(song, calls):
+    calls.replies = [{"upload": {"uploadUrl": None, "uploadId": "U1"}}]
+    assert yoto.start_upload(song, "TOK") == "U1"
+    assert len(calls) == 1
+
+
+def test_wait_transcoded_polls_until_done(calls):
+    calls.replies = [{"transcode": {}}, _done()]
+    slept = []
+
+    track = yoto.wait_transcoded("U1", "TOK", title="小红帽", icon="yoto:#I", sleep=slept.append)
+
+    assert all("/media/upload/U1/transcoded" in c["url"] for c in calls)
     assert len(slept) == 1
-    assert track == yoto.Track("小红帽", "abc", 120, 1000, "stereo", "aac")
+    assert track == yoto.Track("小红帽", "abc", 120, 1000, "stereo", "aac", icon="yoto:#I")
 
 
-def test_upload_track_skips_put_when_yoto_already_has_the_file(tmp_path, calls):
-    song = tmp_path / "a.mp3"
-    song.write_bytes(b"x")
-    calls.replies = [{"upload": {"uploadUrl": None, "uploadId": "U1"}}, _done()]
-    yoto.upload_track(song, "TOK", sleep=lambda s: None)
-    assert [c["method"] for c in calls] == ["GET", "GET"]
-
-
-def test_upload_track_gives_up_after_timeout(tmp_path, calls):
-    song = tmp_path / "a.mp3"
-    song.write_bytes(b"x")
-    calls.replies = [{"upload": {"uploadUrl": "u", "uploadId": "U1"}}, None] + [
-        {"transcode": {}}
-    ] * 10
+def test_wait_transcoded_gives_up_after_timeout(calls):
+    calls.replies = [{"transcode": {}}] * 10
     clock = iter(range(0, 1000, 50))
-    with pytest.raises(yoto.YotoError, match="a.mp3"):
-        yoto.upload_track(song, "TOK", timeout=120, sleep=lambda s: None, now=lambda: next(clock))
+    with pytest.raises(yoto.YotoError, match="小红帽"):
+        yoto.wait_transcoded(
+            "U1", "TOK", title="小红帽", timeout=120, sleep=lambda s: None, now=lambda: next(clock)
+        )
 
 
 def test_build_content_one_chapter_per_track_in_order():
     tracks = [
-        yoto.Track("小红帽", "s1", 100, 1_048_576, "stereo", "aac"),
-        yoto.Track("YMCA", "s2", 200.5, 1_048_576, "stereo", "aac"),
+        _track("小红帽", "s1", duration=100, file_size=1_048_576, channels="stereo", format="aac"),
+        _track("YMCA", "s2", duration=200.5, file_size=1_048_576),
     ]
     body = yoto.build_content("我的歌", tracks)
 
     assert body["title"] == "我的歌"
-    assert "cardId" not in body
     chapters = body["content"]["chapters"]
     assert [c["title"] for c in chapters] == ["小红帽", "YMCA"]
     assert [c["key"] for c in chapters] == ["01", "02"]
+    assert chapters[0]["tracks"][0]["channels"] == "stereo"
+    assert "channels" not in chapters[1]["tracks"][0]
     assert chapters[1]["tracks"][0]["trackUrl"] == "yoto:#s2"
     assert chapters[1]["tracks"][0]["type"] == "audio"
     assert body["metadata"]["media"] == {
@@ -209,32 +221,99 @@ def test_build_content_one_chapter_per_track_in_order():
 
 def test_build_content_never_targets_an_existing_playlist():
     # A cardId would replace that playlist's tracks, dropping songs already on it.
-    body = yoto.build_content("t", [yoto.Track("a", "s", 1, 1, None, None)])
-    assert "cardId" not in body
-    assert "channels" not in body["content"]["chapters"][0]["tracks"][0]
+    assert "cardId" not in yoto.build_content("t", [_track()])
 
 
-def test_upload_track_uses_given_title_over_file_name(tmp_path, calls):
-    song = tmp_path / "兔小贝儿歌 484 小红帽 ｜儿歌大全.mp3"
-    song.write_bytes(b"x")
-    calls.replies = [{"upload": {"uploadUrl": None, "uploadId": "U1"}}, _done()]
-    track = yoto.upload_track(song, "TOK", title="小红帽", sleep=lambda s: None)
-    assert track.title == "小红帽"
+def test_build_content_sets_icon_on_chapter_and_track_and_cover():
+    body = yoto.build_content("t", [_track(icon="yoto:#I1"), _track("b")], cover_url="https://cdn/c")
+
+    first, second = body["content"]["chapters"]
+    assert first["display"] == {"icon16x16": "yoto:#I1"}
+    assert first["tracks"][0]["display"] == {"icon16x16": "yoto:#I1"}
+    assert "display" not in second
+    assert body["metadata"]["cover"] == {"imageL": "https://cdn/c"}
+
+
+def test_build_content_without_cover_has_no_cover_key():
+    assert "cover" not in yoto.build_content("t", [_track()])["metadata"]
 
 
 def test_create_playlist_posts_json_and_returns_card_id(calls):
     calls.replies = [{"card": {"cardId": "NEW"}}]
-    card = yoto.create_playlist("t", [yoto.Track("a", "s", 1, 1, None, None)], "TOK")
-    assert card == "NEW"
+    assert yoto.create_playlist("t", [_track()], "TOK") == "NEW"
     assert calls[0]["method"] == "POST"
     assert calls[0]["url"].endswith("/content")
     assert json.loads(calls[0]["data"])["title"] == "t"
 
 
-# --- Icons and cover images --------------------------------------------------
+# --- publish_playlist ----------------------------------------------------------
 
-PNG = b"\x89PNG\r\n\x1a\n" + b"rest"
-JPEG = b"\xff\xd8\xff\xe0" + b"rest"
+
+@pytest.fixture
+def fake_api(monkeypatch):
+    """Replace the per-step API calls and log what publish_playlist does."""
+    log = []
+    monkeypatch.setattr(yoto, "resolve_icons", lambda specs, token: log.append(("icons", list(specs))) or {s: f"yoto:#{s}" for s in specs})
+    monkeypatch.setattr(yoto, "upload_cover", lambda source, token: log.append(("cover", source)) or "https://cdn/c")
+    monkeypatch.setattr(yoto, "start_upload", lambda path, token: log.append(("send", path.name)) or path.name)
+
+    def wait(uid, token, *, title, icon=None):
+        log.append(("wait", uid))
+        return _track(title, icon=icon)
+
+    monkeypatch.setattr(yoto, "wait_transcoded", wait)
+
+    def create(title, tracks, token, cover_url=None):
+        log.append(("create", title, [(t.title, t.icon) for t in tracks], cover_url))
+        return "NEW"
+
+    monkeypatch.setattr(yoto, "create_playlist", create)
+    return log
+
+
+def test_publish_playlist_resolves_icons_first_then_sends_all_then_waits(tmp_path, fake_api):
+    items = [
+        yoto.Item(tmp_path / "a.mp3", "小白船", "boat"),
+        yoto.Item(tmp_path / "b.mp3", icon="boat"),
+        yoto.Item(tmp_path / "c.mp3"),
+    ]
+
+    card = yoto.publish_playlist("t", items, lambda: "TOK", cover="c.jpg", progress=lambda m: None)
+
+    assert card == "NEW"
+    assert fake_api == [
+        ("icons", ["boat"]),  # deduped, before any audio
+        ("cover", "c.jpg"),
+        ("send", "a.mp3"),  # every file sent before any wait, so Yoto
+        ("send", "b.mp3"),  # transcodes them side by side
+        ("send", "c.mp3"),
+        ("wait", "a.mp3"),
+        ("wait", "b.mp3"),
+        ("wait", "c.mp3"),
+        ("create", "t", [("小白船", "yoto:#boat"), ("b", "yoto:#boat"), ("c", None)], "https://cdn/c"),
+    ]
+
+
+def test_publish_playlist_bad_icon_stops_before_any_audio(tmp_path, fake_api, monkeypatch):
+    def fail(specs, token):
+        raise yoto.YotoError("No Yoto icon matches 'zzz'")
+
+    monkeypatch.setattr(yoto, "resolve_icons", fail)
+    with pytest.raises(yoto.YotoError):
+        yoto.publish_playlist("t", [yoto.Item(tmp_path / "a.mp3", icon="zzz")], lambda: "TOK", progress=lambda m: None)
+    assert fake_api == []
+
+
+def test_publish_playlist_asks_for_a_token_per_request(tmp_path, fake_api):
+    tokens = []
+    yoto.publish_playlist(
+        "t", [yoto.Item(tmp_path / "a.mp3"), yoto.Item(tmp_path / "b.mp3")],
+        lambda: tokens.append(1) or "TOK", progress=lambda m: None,
+    )
+    assert len(tokens) == 5  # 2 sends + 2 waits + create: a long run outlives one token
+
+
+# --- Icons and cover images --------------------------------------------------
 
 ICONS = [
     {"mediaId": "M1", "title": "Moon boat", "publicTags": ["space"]},
@@ -249,29 +328,42 @@ def test_search_icons_ranks_title_then_tag_then_partial_title():
     assert yoto.search_icons(ICONS, "plane") == []
 
 
-def test_resolve_icon_reference_passes_through(calls):
-    assert yoto.resolve_icon("yoto:#abc", "TOK", ICONS) == "yoto:#abc"
+def test_resolve_icons_handles_each_spec_form(tmp_path, calls):
+    png = tmp_path / "moon.png"
+    png.write_bytes(PNG)
+    calls.replies = [{"displayIcon": {"mediaId": "CUSTOM"}}, {"displayIcons": ICONS}]
+
+    resolved = yoto.resolve_icons(["yoto:#abc", str(png), " boat ", "car"], "TOK")
+
+    assert resolved == {
+        "yoto:#abc": "yoto:#abc",
+        str(png): "yoto:#CUSTOM",
+        " boat ": "yoto:#M3",
+        "car": "yoto:#M4",
+    }
+    # One icon upload, then the built-in list fetched once for both words.
+    assert [c["url"].split("?")[0].rsplit("/", 1)[-1] for c in calls] == ["upload", "yoto"]
+
+
+def test_resolve_icons_skips_builtin_list_when_not_needed(calls):
+    yoto.resolve_icons(["yoto:#abc"], "TOK")
     assert calls == []
 
 
-def test_resolve_icon_word_picks_best_builtin_icon(calls):
-    assert yoto.resolve_icon(" boat ", "TOK", ICONS) == "yoto:#M3"
-
-
-def test_resolve_icon_unknown_word_says_how_to_search():
+def test_resolve_icons_unknown_word_says_how_to_search(calls):
+    calls.replies = [{"displayIcons": ICONS}]
     with pytest.raises(yoto.YotoError, match="yotutil yoto icons"):
-        yoto.resolve_icon("unicorn", "TOK", ICONS)
+        yoto.resolve_icons(["unicorn"], "TOK")
 
 
-def test_resolve_icon_image_file_is_uploaded_as_custom_icon(tmp_path, calls):
+def test_upload_icon_sends_raw_bytes(tmp_path, calls):
     png = tmp_path / "moon.png"
     png.write_bytes(PNG)
     calls.replies = [{"displayIcon": {"mediaId": "CUSTOM"}}]
 
-    assert yoto.resolve_icon(str(png), "TOK", ICONS) == "yoto:#CUSTOM"
+    assert yoto.upload_icon(png, "TOK") == "yoto:#CUSTOM"
 
     call = calls[0]
-    assert call["method"] == "POST"
     assert "/media/displayIcons/user/me/upload?" in call["url"]
     assert "autoConvert=true" in call["url"]
     # Raw bytes: Yoto rejects the multipart upload its docs describe.
@@ -307,25 +399,16 @@ def test_image_type_comes_from_bytes_not_file_name(tmp_path, calls):
     assert calls[0]["headers"]["Content-Type"] == "image/png"
 
 
+def test_upload_cover_from_url_goes_through_send(calls, monkeypatch):
+    fetched = []
+    monkeypatch.setattr(yoto, "_send", lambda method, url, **kw: fetched.append(url) or JPEG)
+    calls.replies = [{"coverImage": {"mediaUrl": "https://cdn/cover"}}]
+
+    assert yoto.upload_cover("https://example.com/c.jpg", "TOK") == "https://cdn/cover"
+    assert fetched == ["https://example.com/c.jpg"]
+    assert calls[0]["data"] == JPEG
+
+
 def test_upload_cover_missing_file_is_a_clear_error():
     with pytest.raises(yoto.YotoError, match="not found"):
         yoto.upload_cover("/nope/cover.jpg", "TOK")
-
-
-def test_build_content_sets_icon_on_chapter_and_track_and_cover():
-    tracks = [
-        yoto.Track("a", "s1", 1, 1, None, None, icon="yoto:#I1"),
-        yoto.Track("b", "s2", 1, 1, None, None),
-    ]
-    body = yoto.build_content("t", tracks, cover_url="https://cdn/c")
-
-    first, second = body["content"]["chapters"]
-    assert first["display"] == {"icon16x16": "yoto:#I1"}
-    assert first["tracks"][0]["display"] == {"icon16x16": "yoto:#I1"}
-    assert "display" not in second
-    assert body["metadata"]["cover"] == {"imageL": "https://cdn/c"}
-
-
-def test_build_content_without_cover_has_no_cover_key():
-    body = yoto.build_content("t", [yoto.Track("a", "s", 1, 1, None, None)])
-    assert "cover" not in body["metadata"]

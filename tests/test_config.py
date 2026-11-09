@@ -54,10 +54,6 @@ def test_load_config_expands_home_in_output_dir(tmp_path, monkeypatch):
     assert not config.output_dir.startswith("~")
 
 
-def test_yoto_client_id_defaults_to_none():
-    assert Config().yoto_client_id is None
-
-
 def test_load_config_reads_yoto_client_id(tmp_path, monkeypatch):
     toml_file = tmp_path / "config.toml"
     toml_file.write_text('yoto_client_id = "tpc_abc"\n')

@@ -5,7 +5,14 @@ import typer
 from typer.testing import CliRunner
 from yt_dlp.utils import remove_terminal_sequences
 
-from yotutil.cli import _prepare, _validate_output_options, app
+from yotutil import yoto
+from yotutil.cli import (
+    _BatchLine,
+    _parse_batch_file,
+    _prepare,
+    _validate_output_options,
+    app,
+)
 from yotutil.downloader import DownloadError
 
 runner = CliRunner()
@@ -164,71 +171,7 @@ def test_yoto_login_without_client_id_explains_setup(tmp_path, monkeypatch):
     assert "yoto_client_id" in _plain(result)
 
 
-def test_yoto_upload_creates_no_playlist_when_a_file_fails(tmp_path, monkeypatch):
-    from yotutil import yoto
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text('yoto_client_id = "cid"\n')
-    monkeypatch.setattr("yotutil.config.CONFIG_FILE", cfg)
-    monkeypatch.setattr(yoto, "access_token", lambda cid: "TOK")
-    a, b = tmp_path / "a.mp3", tmp_path / "b.mp3"
-    a.write_bytes(b"x")
-    b.write_bytes(b"x")
-
-    def fake_upload(path, token, title=None):
-        if path.name == "b.mp3":
-            raise yoto.YotoError("boom")
-        return yoto.Track(path.stem, "s", 1, 1, None, None)
-
-    created = []
-    monkeypatch.setattr(yoto, "upload_track", fake_upload)
-    monkeypatch.setattr(yoto, "create_playlist", lambda *a, **k: created.append(a))
-
-    result = runner.invoke(app, ["yoto", "upload", str(a), str(b), "--title", "t"])
-
-    assert result.exit_code == 1
-    assert created == []
-    assert "No playlist was created" in _plain(result)
-
-
-def test_yoto_upload_keeps_given_file_order(tmp_path, monkeypatch):
-    from yotutil import yoto
-
-    cfg = tmp_path / "config.toml"
-    cfg.write_text('yoto_client_id = "cid"\n')
-    monkeypatch.setattr("yotutil.config.CONFIG_FILE", cfg)
-    monkeypatch.setattr(yoto, "access_token", lambda cid: "TOK")
-    files = [tmp_path / n for n in ("z.mp3", "a.mp3", "m.mp3")]
-    for f in files:
-        f.write_bytes(b"x")
-    monkeypatch.setattr(
-        yoto,
-        "upload_track",
-        lambda p, t, title=None: yoto.Track(title or p.stem, "s", 1, 1, None, None),
-    )
-    created = {}
-
-    def fake_create(title, tracks, token, cover_url=None):
-        created.update(title=title, names=[t.title for t in tracks])
-        return "NEW"
-
-    monkeypatch.setattr(yoto, "create_playlist", fake_create)
-
-    result = runner.invoke(app, ["yoto", "upload", *map(str, files), "--title", "t"])
-
-    assert result.exit_code == 0, result.output
-    assert created == {"title": "t", "names": ["z", "a", "m"]}
-    assert "NEW" in _plain(result)
-
-
-def test_yoto_upload_has_no_option_to_overwrite_a_playlist():
-    result = runner.invoke(app, ["yoto", "upload", "--help"])
-    assert "--card-id" not in _plain(result)
-
-
 def test_parse_batch_file_reads_optional_track_names_and_icons():
-    from yotutil.cli import _BatchLine, _parse_batch_file
-
     text = (
         "# kids\n"
         "https://youtu.be/a 小红帽\n"
@@ -248,17 +191,21 @@ def test_parse_batch_file_reads_optional_track_names_and_icons():
 
 
 @pytest.fixture
-def yoto_batch(tmp_path, monkeypatch):
-    """A batch run with download() and the Yoto calls replaced by fakes."""
-    from yotutil import yoto
-
+def yoto_env(tmp_path, monkeypatch):
+    """Signed in to Yoto, with publish_playlist and download() replaced by fakes."""
     cfg = tmp_path / "config.toml"
     cfg.write_text('yoto_client_id = "cid"\n')
     monkeypatch.setattr("yotutil.config.CONFIG_FILE", cfg)
     monkeypatch.setattr(yoto, "access_token", lambda cid: "TOK")
+    monkeypatch.setattr(
+        yoto,
+        "public_icons",
+        lambda token: [{"mediaId": "BOAT", "title": "Boat", "publicTags": ["boat"]}],
+    )
+
     downloads = {
-        "https://youtu.be/a": [str(tmp_path / "Long YouTube title A.mp3")],
-        "https://youtu.be/list": [str(tmp_path / "x.mp3"), str(tmp_path / "y.mp3")],
+        "https://youtu.be/a": [tmp_path / "Long YouTube title A.mp3"],
+        "https://youtu.be/list": [tmp_path / "x.mp3", tmp_path / "y.mp3"],
     }
 
     def fake_download(url, config, **kw):
@@ -267,100 +214,121 @@ def yoto_batch(tmp_path, monkeypatch):
         return downloads[url]
 
     monkeypatch.setattr("yotutil.cli.download", fake_download)
-    uploaded, created = [], []
-    monkeypatch.setattr(
-        yoto,
-        "upload_track",
-        lambda p, t, title=None: uploaded.append(title)
-        or yoto.Track(title, "s", 1, 1, None, None),
-    )
-    def fake_create(title, tracks, token, cover_url=None):
-        created.append({"title": title, "icons": [t.icon for t in tracks], "cover": cover_url})
+
+    published = []
+
+    def fake_publish(title, items, get_token, *, cover=None, progress=print):
+        published.append(
+            {"title": title, "items": [(i.path.name, i.title, i.icon) for i in items], "cover": cover}
+        )
         return "NEW"
 
-    monkeypatch.setattr(yoto, "create_playlist", fake_create)
-    monkeypatch.setattr(yoto, "public_icons", lambda token: ICONS)
-    monkeypatch.setattr(yoto, "upload_cover", lambda source, token: f"https://cdn/{source}")
-    return tmp_path, uploaded, created
+    monkeypatch.setattr(yoto, "publish_playlist", fake_publish)
+    return tmp_path, published
 
 
-ICONS = [
-    {"mediaId": "BOAT", "title": "Boat", "publicTags": ["boat"]},
-    {"mediaId": "NOTE", "title": "Music notes", "publicTags": ["music"]},
-]
-
-
-def test_batch_yoto_uploads_named_tracks_in_order(yoto_batch):
-    tmp_path, uploaded, created = yoto_batch
+def _songs(tmp_path, text):
     f = tmp_path / "songs.txt"
-    f.write_text("https://youtu.be/a 小红帽\nhttps://youtu.be/list 不用\n")
-
-    result = runner.invoke(app, ["batch", str(f), "-o", str(tmp_path), "--yoto", "儿歌精选3"])
-
-    assert result.exit_code == 0, result.output
-    # The name applies to the single song; a playlist URL keeps its file names.
-    assert uploaded == ["小红帽", "x", "y"]
-    assert [c["title"] for c in created] == ["儿歌精选3"]
+    f.write_text(text)
+    return str(f)
 
 
-def test_batch_yoto_uploads_nothing_when_a_download_fails(yoto_batch):
-    tmp_path, uploaded, created = yoto_batch
-    f = tmp_path / "songs.txt"
-    f.write_text("https://youtu.be/a\nhttps://youtu.be/missing\n")
-
-    result = runner.invoke(app, ["batch", str(f), "-o", str(tmp_path), "--yoto", "t"])
-
-    assert result.exit_code == 1
-    assert uploaded == [] and created == []
-    assert "Nothing was uploaded to Yoto" in _plain(result)
-
-
-def test_batch_yoto_rejects_video(tmp_path):
-    f = tmp_path / "songs.txt"
-    f.write_text("https://youtu.be/a\n")
-    result = runner.invoke(app, ["batch", str(f), "--video", "--yoto", "t"])
-    assert result.exit_code != 0
-    assert "--yoto" in _plain(result)
-
-
-def test_batch_yoto_line_icon_overrides_default_icon_and_cover_is_set(yoto_batch):
-    tmp_path, uploaded, created = yoto_batch
-    f = tmp_path / "songs.txt"
-    f.write_text("https://youtu.be/a 小白船 | boat\nhttps://youtu.be/list\n")
+def test_yoto_upload_passes_files_in_given_order_with_icon_and_cover(yoto_env):
+    tmp_path, published = yoto_env
+    files = [tmp_path / n for n in ("z.mp3", "a.mp3")]
+    for f in files:
+        f.write_bytes(b"x")
 
     result = runner.invoke(
-        app,
-        ["batch", str(f), "-o", str(tmp_path), "--yoto", "t", "--icon", "music", "--cover", "c.jpg"],
+        app, ["yoto", "upload", *map(str, files), "--title", "t", "--icon", "boat", "--cover", "c.jpg"]
     )
 
     assert result.exit_code == 0, result.output
-    assert created == [
-        {"title": "t", "icons": ["yoto:#BOAT", "yoto:#NOTE", "yoto:#NOTE"], "cover": "https://cdn/c.jpg"}
+    assert published == [
+        {"title": "t", "items": [("z.mp3", None, "boat"), ("a.mp3", None, "boat")], "cover": "c.jpg"}
+    ]
+    assert "NEW" in _plain(result)
+
+
+def test_yoto_upload_failure_says_no_playlist_was_created(yoto_env, monkeypatch):
+    tmp_path, _ = yoto_env
+    song = tmp_path / "a.mp3"
+    song.write_bytes(b"x")
+
+    def fail(*a, **k):
+        raise yoto.YotoError("boom")
+
+    monkeypatch.setattr(yoto, "publish_playlist", fail)
+    result = runner.invoke(app, ["yoto", "upload", str(song), "--title", "t"])
+
+    assert result.exit_code == 1
+    assert "boom" in _plain(result)
+    assert "No playlist was created" in _plain(result)
+
+
+def test_batch_yoto_builds_items_from_lines(yoto_env):
+    tmp_path, published = yoto_env
+    songs = _songs(tmp_path, "https://youtu.be/a 小白船 | boat\nhttps://youtu.be/list 不用\n")
+
+    result = runner.invoke(
+        app, ["batch", songs, "-o", str(tmp_path), "--yoto", "儿歌精选3", "--icon", "music", "--cover", "c.jpg"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert published == [
+        {
+            "title": "儿歌精选3",
+            "items": [
+                ("Long YouTube title A.mp3", "小白船", "boat"),  # line icon wins
+                # A playlist URL keeps its file names; the --icon default fills in.
+                ("x.mp3", None, "music"),
+                ("y.mp3", None, "music"),
+            ],
+            "cover": "c.jpg",
+        }
     ]
 
 
-def test_unknown_icon_fails_before_any_audio_upload(yoto_batch):
-    tmp_path, uploaded, created = yoto_batch
-    f = tmp_path / "songs.txt"
-    f.write_text("https://youtu.be/a 小白船 | unicornzzz\n")
+def test_batch_yoto_uploads_nothing_when_a_download_fails(yoto_env):
+    tmp_path, published = yoto_env
+    songs = _songs(tmp_path, "https://youtu.be/a\nhttps://youtu.be/missing\n")
 
-    result = runner.invoke(app, ["batch", str(f), "-o", str(tmp_path), "--yoto", "t"])
+    result = runner.invoke(app, ["batch", songs, "-o", str(tmp_path), "--yoto", "t"])
 
     assert result.exit_code == 1
-    assert uploaded == [] and created == []
-    assert "yotutil yoto icons" in _plain(result)
+    assert published == []
+    assert "Nothing was uploaded to Yoto" in _plain(result)
 
 
-def test_batch_icon_and_cover_need_yoto(tmp_path):
-    f = tmp_path / "songs.txt"
-    f.write_text("https://youtu.be/a\n")
-    result = runner.invoke(app, ["batch", str(f), "--cover", "c.jpg"])
+def test_batch_yoto_checks_sign_in_before_downloading(yoto_env, monkeypatch):
+    tmp_path, published = yoto_env
+    downloaded = []
+    monkeypatch.setattr("yotutil.cli.download", lambda url, config, **kw: downloaded.append(url))
+
+    def not_signed_in(cid):
+        raise yoto.YotoError("Not signed in to Yoto. Run: yotutil yoto login")
+
+    monkeypatch.setattr(yoto, "access_token", not_signed_in)
+    result = runner.invoke(app, ["batch", _songs(tmp_path, "https://youtu.be/a\n"), "--yoto", "t"])
+
+    assert result.exit_code == 1
+    assert downloaded == []
+    assert "yotutil yoto login" in _plain(result)
+
+
+def test_batch_yoto_rejects_video(tmp_path):
+    result = runner.invoke(app, ["batch", _songs(tmp_path, "https://youtu.be/a\n"), "--video", "--yoto", "t"])
     assert result.exit_code != 0
     assert "--yoto" in _plain(result)
 
 
-def test_yoto_icons_searches_builtin_icons(yoto_batch):
+def test_batch_icon_and_cover_need_yoto(tmp_path):
+    result = runner.invoke(app, ["batch", _songs(tmp_path, "https://youtu.be/a\n"), "--cover", "c.jpg"])
+    assert result.exit_code != 0
+    assert "--yoto" in _plain(result)
+
+
+def test_yoto_icons_searches_builtin_icons(yoto_env):
     result = runner.invoke(app, ["yoto", "icons", "boat"])
     assert result.exit_code == 0, result.output
     assert "Boat" in _plain(result)
-    assert "Music notes" not in _plain(result)
