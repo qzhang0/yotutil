@@ -52,3 +52,10 @@ def test_load_config_expands_home_in_output_dir(tmp_path, monkeypatch):
     config = load_config()
     assert config.output_dir == str(Path.home() / "Music")
     assert not config.output_dir.startswith("~")
+
+
+def test_load_config_reads_yoto_client_id(tmp_path, monkeypatch):
+    toml_file = tmp_path / "config.toml"
+    toml_file.write_text('yoto_client_id = "tpc_abc"\n')
+    monkeypatch.setattr("yotutil.config.CONFIG_FILE", toml_file)
+    assert load_config().yoto_client_id == "tpc_abc"

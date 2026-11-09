@@ -14,6 +14,8 @@ DEFAULTS = {
     "embed_thumbnail": True,
     # None = use the downloader's built-in client list.
     "player_clients": None,
+    # Client ID of the user's own Yoto developer app; needed only for `yotutil yoto`.
+    "yoto_client_id": None,
 }
 
 
@@ -24,6 +26,7 @@ class Config:
     embed_metadata: bool = DEFAULTS["embed_metadata"]
     embed_thumbnail: bool = DEFAULTS["embed_thumbnail"]
     player_clients: list[str] | None = DEFAULTS["player_clients"]
+    yoto_client_id: str | None = DEFAULTS["yoto_client_id"]
 
 
 def load_config() -> Config:
@@ -42,4 +45,5 @@ def load_config() -> Config:
         embed_metadata=data.get("embed_metadata", DEFAULTS["embed_metadata"]),
         embed_thumbnail=data.get("embed_thumbnail", DEFAULTS["embed_thumbnail"]),
         player_clients=data.get("player_clients", DEFAULTS["player_clients"]),
+        yoto_client_id=data.get("yoto_client_id", DEFAULTS["yoto_client_id"]),
     )

@@ -1,5 +1,6 @@
 """Tests for downloader module."""
 
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -272,3 +273,19 @@ def test_download_no_hint_on_unrelated_failure(_mock_ffmpeg):
         patch.stopall()
 
     assert "out of date" not in str(exc.value)
+
+
+@patch("yotutil.downloader.check_ffmpeg")
+def test_download_returns_final_paths_from_post_hooks(_mock_ffmpeg):
+    with patch("yotutil.downloader.yt_dlp.YoutubeDL") as mock_ydl:
+
+        def run(urls):
+            # yt-dlp calls post_hooks once per finished file with its final path.
+            for hook in mock_ydl.call_args.args[0]["post_hooks"]:
+                hook("/out/a.mp3")
+                hook("/out/b.mp3")
+
+        mock_ydl.return_value.__enter__.return_value.download.side_effect = run
+        paths = download("https://youtu.be/abc", Config(), output_dir="/out")
+
+    assert paths == [Path("/out/a.mp3"), Path("/out/b.mp3")]

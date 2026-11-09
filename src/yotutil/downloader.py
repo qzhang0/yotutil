@@ -3,6 +3,7 @@
 import logging
 import shutil
 from functools import lru_cache
+from pathlib import Path
 
 import yt_dlp
 from yt_dlp.utils import remove_terminal_sequences
@@ -217,8 +218,11 @@ def download(
     video: bool = False,
     max_height: int | None = None,
     compatible: bool = False,
-) -> None:
-    """Download a single URL (video or playlist), as MP3 unless `video` is set."""
+) -> list[Path]:
+    """Download a single URL (video or playlist), as MP3 unless `video` is set.
+
+    Returns the paths of the files written, in download order.
+    """
     check_ffmpeg()
 
     opts = build_yt_dlp_opts(
@@ -228,6 +232,10 @@ def download(
         max_height=max_height,
         compatible=compatible,
     )
+    # yt-dlp calls post_hooks once per finished file, after every postprocessor
+    # has run, with the file's final path.
+    paths: list[Path] = []
+    opts["post_hooks"] = [lambda filename: paths.append(Path(filename))]
     logger.debug("yt-dlp options: %s", opts)
 
     try:
@@ -244,3 +252,4 @@ def download(
                 "~/.config/yotutil/config.toml"
             )
         raise DownloadError(msg) from e
+    return paths
